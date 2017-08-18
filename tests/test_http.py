@@ -3,7 +3,7 @@ import mock
 import socket
 import sys
 import tests
-from six.moves import http_client
+from six.moves import http_client, urllib
 
 
 dummy_url = 'http://127.0.0.1:1'
@@ -126,3 +126,195 @@ def test_get_no_cache():
         response, content = http.request(uri, "GET")
     assert response.status == 200
     assert response.previous is None
+
+
+def test_UserAgent():
+    # Test that we provide a default user-agent
+    http = httplib2.Http()
+    with tests.server_reflect() as uri:
+        response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert b'header-user-agent: Python-httplib2/' in content
+
+
+def test_UserAgentNonDefault():
+    # Test that the default user-agent can be over-ridden
+    http = httplib2.Http()
+    with tests.server_reflect() as uri:
+        response, content = http.request(uri, 'GET', headers={'User-Agent': 'fred/1.0'})
+    assert response.status == 200
+    assert b'header-user-agent: fred/1.0\n' in content
+
+
+def test_Get300WithLocation():
+    # Test the we automatically follow 300 redirects if a Location: header is provided
+    http = httplib2.Http()
+    final_content = b'This is the final destination.\n'
+    routes = {
+        '/final': tests.http_response_bytes(body=final_content),
+        '': tests.http_response_bytes(status='300 Multiple Choices', headers={'location': '/final'}),
+    }
+    with tests.server_route(routes, accept_count=2) as uri:
+        response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert content == final_content
+    assert response.previous.status == 300
+    assert not response.previous.fromcache
+
+    # Confirm that the intermediate 300 is not cached
+    with tests.server_route(routes, accept_count=2) as uri:
+        response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert content == final_content
+    assert response.previous.status == 300
+    assert not response.previous.fromcache
+
+
+def test_Get300WithLocationNoRedirect():
+    # Test the we automatically follow 300 redirects if a Location: header is provided
+    http = httplib2.Http()
+    http.follow_redirects = False
+    with tests.server_const_http(
+            status='300 Multiple Choices', headers={'location': '/final'}, body=b'redirect body',
+            ) as uri:
+        response, content = http.request(uri, 'GET')
+    assert response.status == 300
+
+
+def test_Get300WithoutLocation():
+    # Not giving a Location: header in a 300 response is acceptable
+    # In which case we just return the 300 response
+    http = httplib2.Http()
+    with tests.server_const_http(status='300 Multiple Choices', body=b'redirect body') as uri:
+        response, content = http.request(uri, 'GET')
+    assert response.status == 300
+    assert response.previous is None
+    assert content == b'redirect body'
+
+
+def test_Get301():
+    # Test that we automatically follow 301 redirects
+    # and that we cache the 301 response
+    uri = urllib.parse.urljoin(base, '301/onestep.asis')
+    destination = urllib.parse.urljoin(base, '302/final-destination.txt')
+    http = httplib2.Http()
+    response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert 'content-location' in response
+    assert response['content-location'] == destination
+    assert content == 'This is the final destination.\n'
+    assert response.previous.status == 301
+    assert not response.previous.fromcache
+
+    response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert response['content-location'] == destination
+    assert content == 'This is the final destination.\n'
+    assert response.previous.status == 301
+    assert response.previous.fromcache
+
+
+def test_Head301():
+    # Test that we automatically follow 301 redirects
+    uri = urllib.parse.urljoin(base, '301/onestep.asis')
+    destination = urllib.parse.urljoin(base, '302/final-destination.txt')
+    http = httplib2.Http()
+    response, content = http.request(uri, 'HEAD')
+    assert response.status == 200
+    assert response.previous.status == 301
+    assert not response.previous.fromcache
+
+
+def test_Get301NoRedirect():
+    # Test that we automatically follow 301 redirects
+    # and that we cache the 301 response
+    http = httplib2.Http()
+    http.follow_redirects = False
+    uri = urllib.parse.urljoin(base, '301/onestep.asis')
+    destination = urllib.parse.urljoin(base, '302/final-destination.txt')
+    response, content = http.request(uri, 'GET')
+    assert response.status == 301
+
+
+def test_Get302():
+    # Test that we automatically follow 302 redirects
+    # and that we DO NOT cache the 302 response
+    uri = urllib.parse.urljoin(base, '302/onestep.asis')
+    destination = urllib.parse.urljoin(base, '302/final-destination.txt')
+    http = httplib2.Http()
+    response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert response['content-location'] == destination
+    assert content == 'This is the final destination.\n'
+    assert response.previous.status == 302
+    assert response.previous.fromcache == False
+
+    uri = urllib.parse.urljoin(base, '302/onestep.asis')
+    response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert response.fromcache == True
+    assert response['content-location'] == destination
+    assert content == 'This is the final destination.\n'
+    assert response.previous.status == 302
+    assert response.previous.fromcache == False
+    assert response.previous['content-location'] == uri
+
+    uri = urllib.parse.urljoin(base, '302/twostep.asis')
+
+    response, content = http.request(uri, 'GET')
+    assert response.status == 200
+    assert response.fromcache == True
+    assert content == 'This is the final destination.\n'
+    assert response.previous.status == 302
+    assert response.previous.fromcache == False
+
+
+def test_Get302RedirectionLimit():
+    # Test that we can set a lower redirection limit
+    # and that we raise an exception when we exceed
+    # that limit.
+    http = httplib2.Http()
+    http.force_exception_to_status_code = False
+
+    uri = urllib.parse.urljoin(base, '302/twostep.asis')
+    try:
+        response, content = http.request(uri, 'GET', redirections = 1)
+        self.fail('This should not happen')
+    except httplib2.RedirectLimit:
+        pass
+    except Exception as e:
+        self.fail('Threw wrong kind of exception ')
+
+    # Re-run the test with out the exceptions
+    http.force_exception_to_status_code = True
+
+    response, content = http.request(uri, 'GET', redirections = 1)
+    assert response.status == 500
+    assert response.reason.startswith('Redirected more')
+    assert '302' == response['status']
+    assert content.startswith('<html>')
+    assert response.previous != None
+
+
+def test_Get302NoLocation():
+    # Test that we throw an exception when we get
+    # a 302 with no Location: header.
+    http = httplib2.Http()
+    http.force_exception_to_status_code = False
+    uri = urllib.parse.urljoin(base, '302/no-location.asis')
+    try:
+        response, content = http.request(uri, 'GET')
+        self.fail('Should never reach here')
+    except httplib2.RedirectMissingLocation:
+        pass
+    except Exception as e:
+        self.fail('Threw wrong kind of exception ')
+
+    # Re-run the test with out the exceptions
+    http.force_exception_to_status_code = True
+
+    response, content = http.request(uri, 'GET')
+    assert response.status == 500
+    assert response.reason.startswith('Redirected but')
+    assert '302' == response['status']
+    assert content.startswith('This is content')

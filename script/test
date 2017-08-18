@@ -1,6 +1,7 @@
 #!/bin/bash
 set -eux
 pytest_flags=(
+	--cov=httplib2
 	# --fulltrace
 	--noconftest
 	--showlocals
@@ -11,13 +12,19 @@ pytest_flags=(
 	-ra
 )
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
-if [[ ! -d ./venv-27 ]] ; then
-	virtualenv --python=python2.7 ./venv-27
-	./venv-27/bin/pip install -e . pytest{,-randomly,-flake8,-xdist} six mock
+if [[ "${virtualenv-1}" = "0" ]] ; then
+	pip install -e . pytest{,-cov,-randomly,-flake8,-xdist} six mock
+	pytest ${pytest_flags[@]} $@ tests/
+else
+	if [[ ! -d ./venv-27 ]] ; then
+		virtualenv --python=python2.7 ./venv-27
+		./venv-27/bin/pip install -e . pytest{,-cov,-randomly,-flake8,-xdist} six mock
+	fi
+	if [[ ! -d ./venv-36 ]] ; then
+		virtualenv --python=python3.6 ./venv-36
+		./venv-36/bin/pip install -e . pytest{,-cov,-randomly,-flake8,-xdist} six mock
+	fi
+	./venv-27/bin/pytest ${pytest_flags[@]} $@ tests/
+	./venv-36/bin/pytest ${pytest_flags[@]} $@ tests/
 fi
-if [[ ! -d ./venv-36 ]] ; then
-	virtualenv --python=python3.6 ./venv-36
-	./venv-36/bin/pip install -e . pytest{,-randomly,-flake8,-xdist} six mock
-fi
-./venv-27/bin/pytest ${pytest_flags[@]} $@ tests/
-./venv-36/bin/pytest ${pytest_flags[@]} $@ tests/
+rm -rf ./_httplib2_test_cache

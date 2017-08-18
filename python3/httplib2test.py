@@ -111,32 +111,6 @@ class HttpTest(unittest.TestCase):
         self.http = httplib2.Http(cacheDirName)
         self.http.clear_credentials()
 
-    def testGetOnlyIfCachedCacheHit(self):
-        # Test that can do a GET with cache and 'only-if-cached'
-        uri = urllib.parse.urljoin(base, "304/test_etag.txt")
-        (response, content) = self.http.request(uri, "GET")
-        (response, content) = self.http.request(uri, "GET", headers={'cache-control': 'only-if-cached'})
-        self.assertEqual(response.fromcache, True)
-        self.assertEqual(response.status, 200)
-
-    def testGetOnlyIfCachedCacheMiss(self):
-        # Test that can do a GET with no cache with 'only-if-cached'
-        uri = urllib.parse.urljoin(base, "304/test_etag.txt")
-        (response, content) = self.http.request(uri, "GET", headers={'cache-control': 'only-if-cached'})
-        self.assertEqual(response.fromcache, False)
-        self.assertEqual(response.status, 504)
-
-    def testGetOnlyIfCachedNoCacheAtAll(self):
-        # Test that can do a GET with no cache with 'only-if-cached'
-        # Of course, there might be an intermediary beyond us
-        # that responds to the 'only-if-cached', so this
-        # test can't really be guaranteed to pass.
-        http = httplib2.Http()
-        uri = urllib.parse.urljoin(base, "304/test_etag.txt")
-        (response, content) = http.request(uri, "GET", headers={'cache-control': 'only-if-cached'})
-        self.assertEqual(response.fromcache, False)
-        self.assertEqual(response.status, 504)
-
     def testUserAgent(self):
         # Test that we provide a default user-agent
         uri = urllib.parse.urljoin(base, "user-agent/test.cgi")
