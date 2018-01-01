@@ -1,11 +1,12 @@
+import contextlib
 import hashlib
+import os
+import shutil
 import six
 import socket
 import sys
 import threading
-import time
 from six.moves import http_client
-import contextlib
 
 
 if sys.version_info < (3,):
@@ -160,6 +161,7 @@ def server_route(routes, **kwargs):
 
     def handler(sock):
         request = sock.recv(8 << 10)
+        print('tests.server_route: request=b"{0}"'.format(request))
         line = request.split(b'\r\n', 1)[0].decode()
         method, path, version = line.split(' ', 2)
         response = routes.get(path, response_wildcard) or response_404
@@ -196,3 +198,11 @@ protocol={2}\n\
         sock.sendall(response)
 
     return server_socket(handler, **kwargs)
+
+
+def get_cache_path():
+    default = './_httplib2_test_cache'
+    path = os.environ.get('httplib2_test_cache_path') or default
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    return path
