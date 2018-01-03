@@ -1,4 +1,5 @@
 import contextlib
+import email.utils
 import hashlib
 import os
 import shutil
@@ -29,6 +30,28 @@ def assert_raises(exc_type):
         except AttributeError:
             pass
         assert False, 'Expected exception {0}'.format(name)
+
+
+class Request(object):
+    def __init__(self):
+        self.headers = {}
+
+
+def read_request(sock):
+    buf = sock.recv(8 << 10)
+    r = request_from_bytes(buf)
+    r.client = sock
+    return r
+
+
+def request_from_bytes(buf):
+    line, rest = buf.split(b'\r\n', 1)
+    r = Request()
+    r.method, r.uri, r.proto = line.decode().split(' ', 2)
+    hs, r.body = rest.split(b'\r\n\r\n', 1)
+    hsl = (line.decode().split(':', 1) for line in hs.split(b'\r\n'))
+    r.headers = {t[0].lower(): t[1].lstrip() for t in hsl}
+    return r
 
 
 class MockResponse(BufferBase):
@@ -129,21 +152,37 @@ def server_socket(fun, accept_count=1, timeout=5):
     t.join()
 
 
+def server_request(request_handler, **kwargs):
+    def socket_handler(sock):
+        r = read_request(sock)
+        response = request_handler(request=r)
+        sock.sendall(response)
+
+    return server_socket(socket_handler, **kwargs)
+
+
 def server_const_bytes(response_content, **kwargs):
     def handler(sock):
-        sock.recv(8 << 10)
+        read_request(sock)
         sock.sendall(response_content)
 
     return server_socket(handler, **kwargs)
 
 
+_http_kwargs = (
+    'proto', 'status', 'headers', 'body', 'add_content_length', 'add_date', 'add_etag',
+)
+
+
 def http_response_bytes(proto='HTTP/1.0', status='200 OK', headers=None, body=b'',
-                        add_content_length=False, add_etag=False,
+                        add_content_length=False, add_date=False, add_etag=False,
                         **kwargs):
     if headers is None:
         headers = {}
     if add_content_length:
         headers['content-length'] = str(len(body))
+    if add_date:
+        headers['date'] = email.utils.formatdate()
     if add_etag:
         headers['etag'] = '"{0}"'.format(hashlib.md5(body).hexdigest())
     header_string = ''.join('{0}: {1}\r\n'.format(k, v) for k, v in headers.items())
@@ -155,16 +194,34 @@ def http_response_bytes(proto='HTTP/1.0', status='200 OK', headers=None, body=b'
     return response
 
 
+def make_http_reflect(**kwargs):
+    def fun(request):
+        kw = kwargs.copy()
+        request_headers = ''.join('header-{0}: {1}\n'.format(k, v) for k, v in six.iteritems(request.headers))
+        response_headers = kw.setdefault('headers', {})
+        response_headers['request-method'] = request.method
+        body = '''\
+uri={1}\n\
+protocol={2}\n\
+{3}\n\
+'''.format(request.method, request.uri, request.proto, request_headers).encode()
+        kw.setdefault('body', body)
+        response = http_response_bytes(**kw)
+        return response
+    return fun
+
+
 def server_route(routes, **kwargs):
     response_404 = http_response_bytes(status='404 Not Found')
     response_wildcard = routes.get('')
 
     def handler(sock):
-        request = sock.recv(8 << 10)
-        print('tests.server_route: request=b"{0}"'.format(request))
-        line = request.split(b'\r\n', 1)[0].decode()
-        method, path, version = line.split(' ', 2)
-        response = routes.get(path, response_wildcard) or response_404
+        request = read_request(sock)
+        target = routes.get(request.uri, response_wildcard) or response_404
+        if callable(target):
+            response = target(request=request)
+        else:
+            response = target
         sock.sendall(response)
 
     return server_socket(handler, **kwargs)
@@ -173,31 +230,19 @@ def server_route(routes, **kwargs):
 def server_const_http(**kwargs):
     response_kwargs = {
         k: kwargs.pop(k) for k in dict(kwargs)
-        if k in ('proto', 'status', 'headers', 'body', 'add_content_length', 'add_etag')
+        if k in _http_kwargs
     }
     response = http_response_bytes(**response_kwargs)
     return server_const_bytes(response, **kwargs)
 
 
 def server_reflect(**kwargs):
-    def handler(sock):
-        data = sock.recv(8 << 10)
-        lines = data.decode().splitlines()
-        method, uri, proto = lines[0].split()
-        request_headers = ''.join('header-{0}\n'.format(s) for s in lines[1:] if s)
-        response_headers = {
-            'request-method': method,
-        }
-        response_header_string = ''.join('{0}: {1}\r\n'.format(k, v) for k, v in response_headers.items())
-        body = '''\
-uri={1}\n\
-protocol={2}\n\
-{3}\n\
-'''.format(method, uri, proto, request_headers)
-        response = '''HTTP/1.0 200 OK\r\n{0}\r\n{1}'''.format(response_header_string, body).encode()
-        sock.sendall(response)
-
-    return server_socket(handler, **kwargs)
+    response_kwargs = {
+        k: kwargs.pop(k) for k in dict(kwargs)
+        if k in _http_kwargs
+    }
+    http_handler = make_http_reflect(**response_kwargs)
+    return server_request(http_handler, **kwargs)
 
 
 def get_cache_path():

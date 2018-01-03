@@ -1,5 +1,6 @@
 import httplib2
 import mock
+import os
 import socket
 import sys
 import tests
@@ -345,3 +346,129 @@ def test_Get302NoLocation():
     assert response.reason.startswith('Redirected but')
     assert '302' == response['status']
     assert content == b''
+
+
+def test_Get303():
+    # Do a follow-up GET on a Location: header
+    # returned from a POST that gave a 303.
+    http = httplib2.Http()
+    routes = {
+        '/final': tests.make_http_reflect(body=b'This is the final destination.\n'),
+        '': tests.make_http_reflect(status='303 See Other', headers={'location': '/final'}),
+    }
+    with tests.server_route(routes, accept_count=2) as uri:
+        response, content = http.request(uri, "POST", " ")
+    assert response.status == 200
+    assert content == b"This is the final destination.\n"
+    assert response.previous.status == 303
+
+    # Skip follow-up GET
+    http = httplib2.Http()
+    http.follow_redirects = False
+    with tests.server_route(routes, accept_count=1) as uri:
+        response, content = http.request(uri, "POST", " ")
+    assert response.status == 303
+
+    # All methods can be used
+    http = httplib2.Http()
+    cases = 'DELETE GET HEAD POST PUT EVEN_NEW_ONES'.split(' ')
+    with tests.server_route(routes, accept_count=len(cases)*2) as uri:
+        for method in cases:
+            response, _ = http.request(uri, method, body=b" ")
+            assert response['request-method'] == 'GET'
+
+
+def test_GetEtag():
+    # Test that we use ETags properly to validate our cache
+    cache_path = tests.get_cache_path()
+    http = httplib2.Http(cache=cache_path)
+    response_kwargs = dict(
+        add_date=True,
+        add_etag=True,
+        body=b'something',
+        headers={
+            'cache-control': 'public,max-age=300',
+        },
+    )
+
+    def handler(request):
+        if request.headers.get('range'):
+            return tests.http_response_bytes(status=206, **response_kwargs)
+        return tests.http_response_bytes(**response_kwargs)
+
+    with tests.server_request(handler, accept_count=2) as uri:
+        response, _ = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        assert response['etag'] == '"437b930db84b8079c2dd804a71936b5f"'
+
+        http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        response, _ = http.request(
+            uri, "GET",
+            headers={'accept-encoding': 'identity', 'cache-control': 'must-revalidate'},
+        )
+        assert response.status == 200
+        assert response.fromcache
+
+        # TODO: API to read cache item, at least internal to tests
+        cache_file_name = os.path.join(cache_path, httplib2.safename(httplib2.urlnorm(uri)[-1]))
+        with open(cache_file_name, 'r') as f:
+            status_line = f.readline()
+        assert status_line.startswith("status:")
+
+        response, content = http.request(uri, "HEAD", headers={'accept-encoding': 'identity'})
+        assert response.status == 200
+        assert response.fromcache
+
+        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity', 'range': 'bytes=0-0'})
+        assert response.status == 206
+        assert not response.fromcache
+
+
+def test_GetIgnoreEtag():
+    # Test that we can forcibly ignore ETags
+    http = httplib2.Http(cache=tests.get_cache_path())
+    response_kwargs = dict(
+        add_date=True,
+        add_etag=True,
+    )
+    with tests.server_reflect(accept_count=3, **response_kwargs) as uri:
+        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        assert response['etag'] != ""
+
+        response, content = http.request(
+            uri, "GET",
+            headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
+        )
+        assert b'\nheader-if-none-match:' in content
+
+        http.ignore_etag = True
+        response, content = http.request(
+            uri, "GET",
+            headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
+        )
+        assert not response.fromcache
+        assert b'\nheader-if-none-match:' not in content
+
+
+def test_OverrideEtag():
+    # Test that we can forcibly ignore ETags
+    http = httplib2.Http(cache=tests.get_cache_path())
+    response_kwargs = dict(
+        add_date=True,
+        add_etag=True,
+    )
+    with tests.server_reflect(accept_count=3, **response_kwargs) as uri:
+        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        assert response['etag'] != ""
+
+        response, content = http.request(
+            uri, "GET",
+            headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
+        )
+        assert b'\nheader-if-none-match:' in content
+        assert b'\nheader-if-none-match: fred' not in content
+
+        response, content = http.request(
+            uri, "GET",
+            headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0', 'if-none-match': 'fred'},
+        )
+        assert b'\nheader-if-none-match: fred' in content
