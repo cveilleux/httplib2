@@ -111,57 +111,6 @@ class HttpTest(unittest.TestCase):
         self.http = httplib2.Http(cacheDirName)
         self.http.clear_credentials()
 
-#MAP-commented this out because it consistently fails
-#    def testGet304EndToEnd(self):
-#       # Test that end to end headers get overwritten in the cache
-#        uri = urllib.parse.urljoin(base, "304/end2end.cgi")
-#        (response, content) = self.http.request(uri, "GET")
-#        self.assertNotEqual(response['etag'], "")
-#        old_date = response['date']
-#        time.sleep(2)
-#
-#        (response, content) = self.http.request(uri, "GET", headers = {'Cache-Control': 'max-age=0'})
-#        # The response should be from the cache, but the Date: header should be updated.
-#        new_date = response['date']
-#        self.assertNotEqual(new_date, old_date)
-#        self.assertEqual(response.status, 200)
-#        self.assertEqual(response.fromcache, True)
-
-    def testGet304LastModified(self):
-        # Test that we can still handle a 304
-        # by only using the last-modified cache validator.
-        uri = urllib.parse.urljoin(base, "304/last-modified-only/last-modified-only.txt")
-        (response, content) = self.http.request(uri, "GET")
-
-        self.assertNotEqual(response['last-modified'], "")
-        (response, content) = self.http.request(uri, "GET")
-        (response, content) = self.http.request(uri, "GET")
-        self.assertEqual(response.status, 200)
-        self.assertEqual(response.fromcache, True)
-
-    def testGet307(self):
-        # Test that we do follow 307 redirects but
-        # do not cache the 307
-        uri = urllib.parse.urljoin(base, "307/onestep.asis")
-        (response, content) = self.http.request(uri, "GET")
-        self.assertEqual(response.status, 200)
-        self.assertEqual(content, b"This is the final destination.\n")
-        self.assertEqual(response.previous.status, 307)
-        self.assertEqual(response.previous.fromcache, False)
-
-        (response, content) = self.http.request(uri, "GET")
-        self.assertEqual(response.status, 200)
-        self.assertEqual(response.fromcache, True)
-        self.assertEqual(content, b"This is the final destination.\n")
-        self.assertEqual(response.previous.status, 307)
-        self.assertEqual(response.previous.fromcache, False)
-
-    def testGet410(self):
-        # Test that we pass 410's through
-        uri = urllib.parse.urljoin(base, "410/410.asis")
-        (response, content) = self.http.request(uri, "GET")
-        self.assertEqual(response.status, 410)
-
     def testVaryHeaderSimple(self):
         """
         RFC 2616 13.6

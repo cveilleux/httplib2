@@ -7,7 +7,7 @@ import six
 import socket
 import sys
 import threading
-from six.moves import http_client
+from six.moves import http_client, queue
 
 
 if sys.version_info < (3,):
@@ -39,6 +39,8 @@ class Request(object):
 
 def read_request(sock):
     buf = sock.recv(8 << 10)
+    if buf == b'':
+        return None
     r = request_from_bytes(buf)
     r.client = sock
     return r
@@ -152,6 +154,19 @@ def server_socket(fun, accept_count=1, timeout=5):
     t.join()
 
 
+def server_read_write(fun, **kwargs):
+    qr = queue.Queue(1)
+    g = fun(qr.get)
+
+    def socket_handler(sock):
+        # TODO: limit by kwargs[request_count]
+        request = read_request(sock)
+        qr.put(request)
+        sock.sendall(six.next(g))
+
+    return server_socket(socket_handler, **kwargs)
+
+
 def server_request(request_handler, **kwargs):
     def socket_handler(sock):
         r = read_request(sock)
@@ -234,6 +249,16 @@ def server_const_http(**kwargs):
     }
     response = http_response_bytes(**response_kwargs)
     return server_const_bytes(response, **kwargs)
+
+
+def server_list_http(responses, **kwargs):
+    i = iter(responses)
+
+    def handler(request):
+        return next(i)
+
+    kwargs.setdefault('accept_count', len(responses))
+    return server_request(handler, **kwargs)
 
 
 def server_reflect(**kwargs):

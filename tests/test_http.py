@@ -1,3 +1,4 @@
+import email.utils
 import httplib2
 import mock
 import os
@@ -86,7 +87,7 @@ def test_get_iri():
     query = u'?a=\N{CYRILLIC CAPITAL LETTER DJE}'
     with tests.server_reflect() as uri:
         response, content = http.request(uri + query, "GET")
-    d = dict(tuple(x.split(b"=", 1)) for x in content.strip().split(b"\n"))
+    d = dict(tuple(x.split(b"=", 1)) for x in content.strip().split(b"\n")[:1])
     assert b'uri' in d
     assert b'a=%D0%82' in d[b'uri']
 
@@ -230,7 +231,7 @@ def test_Head301():
         '': tests.http_response_bytes(
             status='301 Now where did I leave that URL', headers={'location': '/final'}, body=b'redirect body'),
     }
-    with tests.server_route(routes, accept_count=3) as uri:
+    with tests.server_route(routes, accept_count=2) as uri:
         destination = urllib.parse.urljoin(uri, '/final')
         response, content = http.request(uri, 'HEAD')
     assert response.status == 200
@@ -472,3 +473,88 @@ def test_OverrideEtag():
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0', 'if-none-match': 'fred'},
         )
         assert b'\nheader-if-none-match: fred' in content
+
+
+#    def testGet304EndToEnd(self):
+#       # Test that end to end headers get overwritten in the cache
+#        uri = urllib.parse.urljoin(base, "304/end2end.cgi")
+#        response, content = http.request(uri, "GET")
+#        assertNotEqual(response['etag'], "")
+#        old_date = response['date']
+#        time.sleep(2)
+#
+#        response, content = http.request(uri, "GET", headers = {'Cache-Control': 'max-age=0'})
+#        # The response should be from the cache, but the Date: header should be updated.
+#        new_date = response['date']
+#        assertNotEqual(new_date, old_date)
+#        assert response.status == 200
+#        assert response.fromcache == True
+
+
+def test_Get304LastModified():
+    # Test that we can still handle a 304
+    # by only using the last-modified cache validator.
+    http = httplib2.Http(cache=tests.get_cache_path())
+    date = email.utils.formatdate()
+
+    def handler(read):
+        read()
+        yield tests.http_response_bytes(
+            status=200,
+            body=b'something',
+            headers={
+                'date': date,
+                'last-modified': date,
+            },
+        )
+
+        request2 = read()
+        assert request2.headers['if-modified-since'] == date
+        yield tests.http_response_bytes(status=304)
+
+    with tests.server_read_write(handler, accept_count=2) as uri:
+        response, content = http.request(uri, "GET")
+        assert response.get('last-modified') == date
+
+        response, content = http.request(uri, "GET")
+        assert response.status == 200
+        assert response.fromcache
+
+
+def test_Get307():
+    # Test that we do follow 307 redirects but
+    # do not cache the 307
+    http = httplib2.Http(cache=tests.get_cache_path(), timeout=1)
+    r307 = tests.http_response_bytes(
+        status=307,
+        headers={'location': '/final'},
+    )
+    r200 = tests.http_response_bytes(
+        status=200,
+        add_date=True,
+        body=b'final content\n',
+        headers={'cache-control': 'max-age=300'},
+    )
+
+    with tests.server_list_http([r307, r200, r307]) as uri:
+        response, content = http.request(uri, "GET")
+        assert response.previous.status == 307
+        assert not response.previous.fromcache
+        assert response.status == 200
+        assert not response.fromcache
+        assert content == b'final content\n'
+
+        response, content = http.request(uri, "GET")
+        assert response.previous.status == 307
+        assert not response.previous.fromcache
+        assert response.status == 200
+        assert response.fromcache
+        assert content == b'final content\n'
+
+
+def test_Get410():
+    # Test that we pass 410's through
+    http = httplib2.Http()
+    with tests.server_const_http(status=410) as uri:
+        response, content = http.request(uri, "GET")
+        assert response.status == 410

@@ -18,7 +18,7 @@ def test_GetOnlyIfCachedCacheHit():
 def test_GetOnlyIfCachedCacheMiss():
     # Test that can do a GET with no cache with 'only-if-cached'
     http = httplib2.Http(cache=tests.get_cache_path())
-    with tests.server_const_http(add_etag=True) as uri:
+    with tests.server_const_http(accept_count=0) as uri:
         response, content = http.request(uri, "GET", headers={'cache-control': 'only-if-cached'})
     assert not response.fromcache
     assert response.status == 504
@@ -30,7 +30,7 @@ def test_GetOnlyIfCachedNoCacheAtAll():
     # that responds to the 'only-if-cached', so this
     # test can't really be guaranteed to pass.
     http = httplib2.Http()
-    with tests.server_const_http(add_etag=True) as uri:
+    with tests.server_const_http(accept_count=0) as uri:
         response, content = http.request(uri, "GET", headers={'cache-control': 'only-if-cached'})
     assert not response.fromcache
     assert response.status == 504
