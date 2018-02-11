@@ -2,9 +2,11 @@ import email.utils
 import httplib2
 import mock
 import os
+import pytest
 import socket
 import sys
 import tests
+import time
 from six.moves import http_client, urllib
 
 
@@ -475,20 +477,22 @@ def test_OverrideEtag():
         assert b'\nheader-if-none-match: fred' in content
 
 
-#    def testGet304EndToEnd(self):
-#       # Test that end to end headers get overwritten in the cache
-#        uri = urllib.parse.urljoin(base, "304/end2end.cgi")
-#        response, content = http.request(uri, "GET")
-#        assertNotEqual(response['etag'], "")
-#        old_date = response['date']
-#        time.sleep(2)
-#
-#        response, content = http.request(uri, "GET", headers = {'Cache-Control': 'max-age=0'})
-#        # The response should be from the cache, but the Date: header should be updated.
-#        new_date = response['date']
-#        assertNotEqual(new_date, old_date)
-#        assert response.status == 200
-#        assert response.fromcache == True
+@pytest.mark.skip(reason='was commented in legacy code')
+def test_Get304EndToEnd():
+    pass
+    # Test that end to end headers get overwritten in the cache
+    # uri = urllib.parse.urljoin(base, "304/end2end.cgi")
+    # response, content = http.request(uri, "GET")
+    # assertNotEqual(response['etag'], "")
+    # old_date = response['date']
+    # time.sleep(2)
+
+    # response, content = http.request(uri, "GET", headers = {'Cache-Control': 'max-age=0'})
+    # # The response should be from the cache, but the Date: header should be updated.
+    # new_date = response['date']
+    # assert new_date != old_date
+    # assert response.status == 200
+    # assert response.fromcache == True
 
 
 def test_Get304LastModified():
@@ -558,3 +562,108 @@ def test_Get410():
     with tests.server_const_http(status=410) as uri:
         response, content = http.request(uri, "GET")
         assert response.status == 410
+
+
+@pytest.mark.xfail(
+    sys.version_info >= (3,),
+    reason='FIXME: for unknown reason global timeout test fails in Python3',
+)
+def test_timeout_global():
+    def handler(request):
+        time.sleep(0.5)
+        return tests.http_response_bytes()
+
+    try:
+        socket.setdefaulttimeout(0.1)
+    except Exception:
+        pytest.skip('cannot set global socket timeout')
+    try:
+        http = httplib2.Http()
+        http.force_exception_to_status_code = True
+        with tests.server_request(handler) as uri:
+            response, content = http.request(uri)
+            assert response.status == 408
+            assert response.reason.startswith("Request Timeout")
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def test_timeout_individual():
+    def handler(request):
+        time.sleep(0.5)
+        return tests.http_response_bytes()
+
+    http = httplib2.Http(timeout=0.1)
+    http.force_exception_to_status_code = True
+
+    with tests.server_request(handler) as uri:
+        response, content = http.request(uri)
+        assert response.status == 408
+        assert response.reason.startswith("Request Timeout")
+
+
+def test_timeout_https():
+    c = httplib2.HTTPSConnectionWithTimeout('localhost', 80, timeout=47)
+    assert 47 == c.timeout
+
+
+def test_GetDuplicateHeaders():
+    # Test that duplicate headers get concatenated via ','
+    http = httplib2.Http()
+    response = b'''HTTP/1.0 200 OK\r\n\
+Link: link1\r\n\
+Content-Length: 7\r\n\
+Link: link2\r\n\r\n\
+content'''
+    with tests.server_const_bytes(response) as uri:
+        response, content = http.request(uri, "GET")
+        assert response.status == 200
+        assert content == b"content"
+        assert response['link'], 'link1, link2'
+
+
+@pytest.mark.skip(reason='FIXME: tests.serve_socket is not capable of keepalive connections')
+def test_ConnectionClose():
+    http = httplib2.Http()
+    count = [0]
+
+    def handler(client):
+        count[0] += 1
+        client.sendall(tests.http_response_bytes(proto='HTTP/1.1'))
+        if count[0] > 1:
+            client.close()
+            return
+
+    with tests.server_socket(handler, accept_count=2) as uri:
+        http.request(uri, "GET")
+        for c in http.connections.values():
+            assert c.sock is not None
+        response, content = http.request(uri, "GET", headers={"connection": "close"})
+        for c in http.connections.values():
+            assert c.sock is None
+
+
+def test_End2End():
+    # one end to end header
+    response = {'content-type': 'application/atom+xml', 'te': 'deflate'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert 'content-type' in end2end
+    assert 'te' not in end2end
+    assert 'connection' not in end2end
+
+    # one end to end header that gets eliminated
+    response = {'connection': 'content-type', 'content-type': 'application/atom+xml', 'te': 'deflate'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert 'content-type' not in end2end
+    assert 'te' not in end2end
+    assert 'connection' not in end2end
+
+    # Degenerate case of no headers
+    response = {}
+    end2end = httplib2._get_end2end_headers(response)
+    assert len(end2end) == 0
+
+    # Degenerate case of connection referrring to a header not passed in
+    response = {'connection': 'content-type'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert len(end2end) == 0

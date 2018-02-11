@@ -1,5 +1,6 @@
 import contextlib
 import email.utils
+import gzip
 import hashlib
 import os
 import shutil
@@ -7,6 +8,7 @@ import six
 import socket
 import sys
 import threading
+import zlib
 from six.moves import http_client, queue
 
 
@@ -276,3 +278,26 @@ def get_cache_path():
     if os.path.exists(path):
         shutil.rmtree(path)
     return path
+
+
+def gzip_compress(bs):
+    # gzipobj = zlib.compressobj(9, zlib.DEFLATED, zlib.MAX_WBITS | 16)
+    # result = gzipobj.compress(text) + gzipobj.flush()
+    buf = six.BytesIO()
+    gf = gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6)
+    gf.write(bs)
+    gf.close()
+    return buf.getvalue()
+
+
+def gzip_decompress(bs):
+    return zlib.decompress(bs, zlib.MAX_WBITS | 16)
+
+
+def deflate_compress(bs):
+    do = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    return do.compress(bs) + do.flush()
+
+
+def deflate_decompress(bs):
+    return zlib.decompress(bs, -zlib.MAX_WBITS)
