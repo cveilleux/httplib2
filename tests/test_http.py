@@ -6,7 +6,6 @@ import pytest
 import socket
 import sys
 import tests
-import time
 from six.moves import http_client, urllib
 
 
@@ -88,8 +87,8 @@ def test_get_iri():
     http = httplib2.Http()
     query = u'?a=\N{CYRILLIC CAPITAL LETTER DJE}'
     with tests.server_reflect() as uri:
-        response, content = http.request(uri + query, "GET")
-    d = dict(tuple(x.split(b"=", 1)) for x in content.strip().split(b"\n")[:1])
+        response, content = http.request(uri + query, 'GET')
+    d = dict(tuple(x.split(b'=', 1)) for x in content.strip().split(b'\n')[:3])
     assert b'uri' in d
     assert b'a=%D0%82' in d[b'uri']
 
@@ -106,7 +105,7 @@ def test_different_methods():
     # Test that all methods can be used
     http = httplib2.Http()
     methods = ["GET", "PUT", "DELETE", "POST", "unknown"]
-    with tests.server_reflect(accept_count=len(methods)) as uri:
+    with tests.server_reflect(request_count=len(methods)) as uri:
         for method in methods:
             response, content = http.request(uri, method, body=b" ")
             assert response['request-method'] == method
@@ -158,7 +157,7 @@ def test_Get300WithLocation():
         '/final': tests.http_response_bytes(body=final_content),
         '': tests.http_response_bytes(status='300 Multiple Choices', headers={'location': '/final'}),
     }
-    with tests.server_route(routes, accept_count=2) as uri:
+    with tests.server_route(routes, request_count=2) as uri:
         response, content = http.request(uri, 'GET')
     assert response.status == 200
     assert content == final_content
@@ -166,7 +165,7 @@ def test_Get300WithLocation():
     assert not response.previous.fromcache
 
     # Confirm that the intermediate 300 is not cached
-    with tests.server_route(routes, accept_count=2) as uri:
+    with tests.server_route(routes, request_count=2) as uri:
         response, content = http.request(uri, 'GET')
     assert response.status == 200
     assert content == final_content
@@ -206,7 +205,7 @@ def test_Get301():
         '': tests.http_response_bytes(
             status='301 Now where did I leave that URL', headers={'location': '/final'}, body=b'redirect body'),
     }
-    with tests.server_route(routes, accept_count=3) as uri:
+    with tests.server_route(routes, request_count=3) as uri:
         destination = urllib.parse.urljoin(uri, '/final')
         response1, content1 = http.request(uri, 'GET')
         response2, content2 = http.request(uri, 'GET')
@@ -233,7 +232,7 @@ def test_Head301():
         '': tests.http_response_bytes(
             status='301 Now where did I leave that URL', headers={'location': '/final'}, body=b'redirect body'),
     }
-    with tests.server_route(routes, accept_count=2) as uri:
+    with tests.server_route(routes, request_count=2) as uri:
         destination = urllib.parse.urljoin(uri, '/final')
         response, content = http.request(uri, 'HEAD')
     assert response.status == 200
@@ -266,7 +265,7 @@ def test_Get302():
         '': tests.http_response_bytes(
             status='302 Found', headers={'location': '/second'}, body=b'redirect body'),
     }
-    with tests.server_route(routes, accept_count=7) as uri:
+    with tests.server_route(routes, request_count=7) as uri:
         second_url = urllib.parse.urljoin(uri, '/second')
         final_url = urllib.parse.urljoin(uri, '/final')
         response1, content1 = http.request(second_url, 'GET')
@@ -307,7 +306,7 @@ def test_Get302RedirectionLimit():
         '': tests.http_response_bytes(
             status='302 Found', headers={'location': '/second'}, body=b'redirect body'),
     }
-    with tests.server_route(routes, accept_count=4) as uri:
+    with tests.server_route(routes, request_count=4) as uri:
         try:
             http.request(uri, 'GET', redirections=1)
             assert False, 'This should not happen'
@@ -332,7 +331,7 @@ def test_Get302NoLocation():
     # a 302 with no Location: header.
     http = httplib2.Http()
     http.force_exception_to_status_code = False
-    with tests.server_const_http(status='302 Found', accept_count=2) as uri:
+    with tests.server_const_http(status='302 Found', request_count=2) as uri:
         try:
             http.request(uri, 'GET')
             assert False, 'Should never reach here'
@@ -359,7 +358,7 @@ def test_Get303():
         '/final': tests.make_http_reflect(body=b'This is the final destination.\n'),
         '': tests.make_http_reflect(status='303 See Other', headers={'location': '/final'}),
     }
-    with tests.server_route(routes, accept_count=2) as uri:
+    with tests.server_route(routes, request_count=2) as uri:
         response, content = http.request(uri, "POST", " ")
     assert response.status == 200
     assert content == b"This is the final destination.\n"
@@ -368,14 +367,14 @@ def test_Get303():
     # Skip follow-up GET
     http = httplib2.Http()
     http.follow_redirects = False
-    with tests.server_route(routes, accept_count=1) as uri:
+    with tests.server_route(routes, request_count=1) as uri:
         response, content = http.request(uri, "POST", " ")
     assert response.status == 303
 
     # All methods can be used
     http = httplib2.Http()
     cases = 'DELETE GET HEAD POST PUT EVEN_NEW_ONES'.split(' ')
-    with tests.server_route(routes, accept_count=len(cases)*2) as uri:
+    with tests.server_route(routes, request_count=len(cases)*2) as uri:
         for method in cases:
             response, _ = http.request(uri, method, body=b" ")
             assert response['request-method'] == 'GET'
@@ -399,7 +398,7 @@ def test_GetEtag():
             return tests.http_response_bytes(status=206, **response_kwargs)
         return tests.http_response_bytes(**response_kwargs)
 
-    with tests.server_request(handler, accept_count=2) as uri:
+    with tests.server_request(handler, request_count=2) as uri:
         response, _ = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
         assert response['etag'] == '"437b930db84b8079c2dd804a71936b5f"'
 
@@ -433,7 +432,7 @@ def test_GetIgnoreEtag():
         add_date=True,
         add_etag=True,
     )
-    with tests.server_reflect(accept_count=3, **response_kwargs) as uri:
+    with tests.server_reflect(request_count=3, **response_kwargs) as uri:
         response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
         assert response['etag'] != ""
 
@@ -459,7 +458,7 @@ def test_OverrideEtag():
         add_date=True,
         add_etag=True,
     )
-    with tests.server_reflect(accept_count=3, **response_kwargs) as uri:
+    with tests.server_reflect(request_count=3, **response_kwargs) as uri:
         response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
         assert response['etag'] != ""
 
@@ -516,7 +515,7 @@ def test_Get304LastModified():
         assert request2.headers['if-modified-since'] == date
         yield tests.http_response_bytes(status=304)
 
-    with tests.server_read_write(handler, accept_count=2) as uri:
+    with tests.server_yield(handler, request_count=2) as uri:
         response, content = http.request(uri, "GET")
         assert response.get('last-modified') == date
 
@@ -568,45 +567,6 @@ def test_Get410():
     sys.version_info >= (3,),
     reason='FIXME: for unknown reason global timeout test fails in Python3',
 )
-def test_timeout_global():
-    def handler(request):
-        time.sleep(0.5)
-        return tests.http_response_bytes()
-
-    try:
-        socket.setdefaulttimeout(0.1)
-    except Exception:
-        pytest.skip('cannot set global socket timeout')
-    try:
-        http = httplib2.Http()
-        http.force_exception_to_status_code = True
-        with tests.server_request(handler) as uri:
-            response, content = http.request(uri)
-            assert response.status == 408
-            assert response.reason.startswith("Request Timeout")
-    finally:
-        socket.setdefaulttimeout(None)
-
-
-def test_timeout_individual():
-    def handler(request):
-        time.sleep(0.5)
-        return tests.http_response_bytes()
-
-    http = httplib2.Http(timeout=0.1)
-    http.force_exception_to_status_code = True
-
-    with tests.server_request(handler) as uri:
-        response, content = http.request(uri)
-        assert response.status == 408
-        assert response.reason.startswith("Request Timeout")
-
-
-def test_timeout_https():
-    c = httplib2.HTTPSConnectionWithTimeout('localhost', 80, timeout=47)
-    assert 47 == c.timeout
-
-
 def test_GetDuplicateHeaders():
     # Test that duplicate headers get concatenated via ','
     http = httplib2.Http()
@@ -634,7 +594,7 @@ def test_ConnectionClose():
             client.close()
             return
 
-    with tests.server_socket(handler, accept_count=2) as uri:
+    with tests.server_socket(handler, request_count=2) as uri:
         http.request(uri, "GET")
         for c in http.connections.values():
             assert c.sock is not None

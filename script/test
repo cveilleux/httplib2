@@ -7,10 +7,22 @@ pip_install=(
 	pytest{,-cov,-randomly,-xdist}
 	six
 )
+# By default, run tests with pytest-forked plugin,
+# disable in terminal for debugging, you may add --forked
+flag_forked="--forked"
+if [[ -t 1 ]] ; then
+	flag_forked=""
+fi
+test_flags=(
+	$@
+	$flag_forked
+	tests/
+)
+
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
 if [[ "${virtualenv-1}" = "0" ]] ; then
 	pip install ${pip_install[@]}
-	pytest $@ tests/
+	pytest ${test_flags[@]}
 else
 	if [[ ! -d ./venv-27 ]] ; then
 		virtualenv --python=python2.7 ./venv-27
@@ -20,8 +32,8 @@ else
 		virtualenv --python=python3.6 ./venv-36
 		./venv-27/bin/pip install ${pip_install[@]}
 	fi
-	./venv-27/bin/pytest $@ tests/
-	./venv-36/bin/pytest $@ tests/
+	./venv-27/bin/pytest ${test_flags[@]}
+	./venv-36/bin/pytest ${test_flags[@]}
 	# FIXME: too many errors
 	# ./venv-27/bin/flake8 python2/
 	# ./venv-36/bin/flake8 python3/ tests/
