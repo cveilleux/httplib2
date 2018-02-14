@@ -1,12 +1,5 @@
 #!/bin/bash
 set -eux
-pip_install=(
-	-e .
-	flake8
-	mock
-	pytest{,-cov,-randomly,-xdist}
-	six
-)
 # By default, run tests with pytest-forked plugin,
 # disable in terminal for debugging, you may add --forked
 flag_forked="--forked"
@@ -20,17 +13,26 @@ test_flags=(
 )
 
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
-if [[ "${virtualenv-1}" = "0" ]] ; then
-	pip install ${pip_install[@]}
-	pytest ${test_flags[@]}
+if [[ -n "${CONTINUOUS_INTEGRATION-}" ]] ; then
+	if [[ "${test_group-}" = "pep8" ]] ; then
+		if [[ "${TRAVIS_PYTHON_VERSION}" = "2.7" ]] ; then
+			flake8 python2/
+		else
+			flake8 python3/ tests/
+		fi
+	else
+		pip install -e .
+		pytest ${test_flags[@]}
+	fi
+	codecov --flags=$(echo $python |tr -d -- '-.')
 else
 	if [[ ! -d ./venv-27 ]] ; then
 		virtualenv --python=python2.7 ./venv-27
-		./venv-27/bin/pip install ${pip_install[@]}
+		./venv-27/bin/pip install -e . -r requirements-test.txt
 	fi
 	if [[ ! -d ./venv-36 ]] ; then
 		virtualenv --python=python3.6 ./venv-36
-		./venv-27/bin/pip install ${pip_install[@]}
+		./venv-36/bin/pip install -e . -r requirements-test.txt
 	fi
 	./venv-27/bin/pytest ${test_flags[@]}
 	./venv-36/bin/pytest ${test_flags[@]}
