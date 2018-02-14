@@ -1,6 +1,6 @@
 from __future__ import print_function
+
 import base64
-import binascii
 import contextlib
 import email.utils
 import gzip
@@ -12,6 +12,7 @@ import shutil
 import six
 import socket
 import threading
+import time
 import traceback
 import zlib
 from six.moves import http_client, queue
@@ -397,26 +398,40 @@ def http_parse_auth(s):
     return result
 
 
-def http_reflect_with_auth(allow_scheme, allow_credentials, deny_response=None):
+def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None):
     '''
     allow_scheme - 'basic', 'digest', etc
     allow_credentials - sequence of ('name', 'password')
+    out_renew_nonce - None | [function]
+        Way to return nonce renew function to caller.
+        Kind of `out` parameter in some programming languages.
+        Allows to keep same signature for all handler builder functions.
     '''
-    nonce = gen_digest_nonce()
-    opaque = gen_digest_nonce()
+    glastnc = [None]
+    gnextnonce = [None]
+    gserver_nonce = [gen_digest_nonce()]
     realm = 'httplib2 test'
+    server_opaque = gen_digest_nonce()
+
+    def renew_nonce():
+        if gnextnonce[0]:
+            assert False, 'previous nextnonce was not used, probably bug in test code'
+        gnextnonce[0] = gen_digest_nonce()
+        return gserver_nonce[0], gnextnonce[0]
+
+    if out_renew_nonce:
+        out_renew_nonce[0] = renew_nonce
 
     def deny(**kwargs):
-        if deny_response is not None:
-            return deny_response
-
+        if kwargs.pop('nonce_stale', None):
+            kwargs.setdefault('body', b'nonce stale')
         if allow_scheme == 'basic':
             authenticate = 'basic realm="{realm}"'.format(realm=realm)
         elif allow_scheme == 'digest':
             authenticate = ', '.join((
-                'digest realm="{realm}", qop="auth"',
-                'nonce="{nonce}", opaque="{opaque}"'
-            )).format(realm=realm, nonce=nonce, opaque=opaque)
+                'digest realm="{realm}"', 'qop="auth"',
+                'nonce="{nonce}"', 'opaque="{opaque}"'
+            )).format(realm=realm, nonce=gserver_nonce[0], opaque=server_opaque)
         else:
             raise Exception('unknown allow_scheme={0}'.format(allow_scheme))
         deny_headers = {'www-authenticate': authenticate}
@@ -445,24 +460,64 @@ def http_reflect_with_auth(allow_scheme, allow_credentials, deny_response=None):
             else:
                 return deny(body=b'supplied credentials are not allowed')
         elif scheme == 'digest':
+            server_nonce_old = gserver_nonce[0]
+            nextnonce = gnextnonce[0]
+            if nextnonce:
+                # server decided to change nonce, in this case, guided by caller test code
+                gserver_nonce[0] = nextnonce
+                gnextnonce[0] = None
+            server_nonce_current = gserver_nonce[0]
+            auth_info = http_parse_auth(data)
+            client_cnonce = auth_info.get('cnonce', '')
+            client_nc = auth_info.get('nc', '')
+            client_nonce = auth_info.get('nonce', '')
+            client_opaque = auth_info.get('opaque', '')
+            client_qop = auth_info.get('qop', 'auth').strip('"')
+
+            # TODO: auth_info.get('algorithm', 'md5')
+            hasher = hashlib.md5
+
+            # TODO: client_qop auth-int
+            ha2 = hasher(':'.join((request.method, request.uri)).encode()).hexdigest()
+
+            if client_nonce != server_nonce_current:
+                if client_nonce == server_nonce_old:
+                    return deny(nonce_stale=True)
+                return deny(body=b'invalid nonce')
+            if not client_nc:
+                return deny(body=b'auth-info nc missing')
+            if client_opaque != server_opaque:
+                return deny(body='auth-info opaque mismatch expected={} actual={}'
+                            .format(server_opaque, client_opaque).encode())
             for allow_username, allow_password in allow_credentials:
-                digest = http_parse_auth(data)
-                hasher = hashlib.md5
                 ha1 = hasher(':'.join((allow_username, realm, allow_password)).encode()).hexdigest()
-                ha2 = hasher(':'.join((request.method, request.uri)).encode()).hexdigest()
                 allow_response = hasher(':'.join((
-                    ha1,
-                    digest.get('nonce', ''),
-                    digest.get('nc', ''),
-                    digest.get('cnonce', ''),
-                    digest.get('qop', ''),
-                    ha2,
+                    ha1, client_nonce, client_nc, client_cnonce, client_qop, ha2,
                 )).encode()).hexdigest()
-                if digest.get('response', '') == allow_response:
-                    return make_http_reflect()(request)
+                rspauth_ha2 = hasher(':{}'.format(request.uri).encode()).hexdigest()
+                rspauth = hasher(':'.join((
+                    ha1, client_nonce, client_nc, client_cnonce, client_qop, rspauth_ha2,
+                )).encode()).hexdigest()
+                if auth_info.get('response', '') == allow_response:
+                    # TODO: fix or remove doubtful comment
+                    # do we need to save nc only on success?
+                    glastnc[0] = client_nc
+                    allow_headers = {
+                        'authentication-info': ' '.join((
+                            'nextnonce="{}"'.format(nextnonce) if nextnonce else '',
+                            'qop={}'.format(client_qop),
+                            'rspauth="{}"'.format(rspauth),
+                            'cnonce="{}"'.format(client_cnonce),
+                            'nc={}'.format(client_nc),
+                        )).strip(),
+                    }
+                    return make_http_reflect(headers=allow_headers)(request)
             return deny(body=b'supplied credentials are not allowed')
         else:
-            return http_response_bytes(status=400, body=b'unknown authorization scheme={0}'.format(scheme))
+            return http_response_bytes(
+                status=400,
+                body='unknown authorization scheme={0}'.format(scheme).encode(),
+            )
 
     return http_reflect_with_auth_handler
 
@@ -476,8 +531,7 @@ def get_cache_path():
 
 
 def gen_digest_nonce():
-    d = b''.join(six.int2byte(random.randint(0, 255)) for _ in range(17))
-    return binascii.hexlify(d)
+    return base64.b64encode('{}'.format(time.time()).encode()).decode()
 
 
 def gen_password():

@@ -146,6 +146,7 @@ if sys.version_info < (2,4):
         seq.sort()
         return seq
 
+
 # Python 2.3 support
 def HTTPResponse__getheaders(self):
     """Return list of (header, value) tuples."""
@@ -223,12 +224,14 @@ except ImportError:
 # Which headers are hop-by-hop headers by default
 HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade']
 
+
 def _get_end2end_headers(response):
     hopbyhop = list(HOP_BY_HOP)
     hopbyhop.extend([x.strip() for x in response.get('connection', '').split(',')])
     return [header for header in response.keys() if header not in hopbyhop]
 
 URI = re.compile(r"^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?")
+
 
 def parse_uri(uri):
     """Parses a URI using the regex given in Appendix B of RFC 3986.
@@ -237,6 +240,7 @@ def parse_uri(uri):
     """
     groups = URI.match(uri).groups()
     return (groups[1], groups[3], groups[4], groups[6], groups[8])
+
 
 def urlnorm(uri):
     (scheme, authority, path, query, fragment) = parse_uri(uri)
@@ -257,6 +261,7 @@ def urlnorm(uri):
 # Cache filename construction (original borrowed from Venus http://intertwingly.net/code/venus/)
 re_url_scheme    = re.compile(r'^\w+://')
 re_slash         = re.compile(r'[?/:|]+')
+
 
 def safename(filename):
     """Return a filename suitable for the cache.
@@ -286,8 +291,11 @@ def safename(filename):
     return ",".join((filename, filemd5))
 
 NORMALIZE_SPACE = re.compile(r'(?:\r\n)?[ \t]+')
+
+
 def _normalize_headers(headers):
     return dict([ (key.lower(), NORMALIZE_SPACE.sub(value, ' ').strip())  for (key, value) in headers.iteritems()])
+
 
 def _parse_cache_control(headers):
     retval = {}
@@ -418,6 +426,7 @@ def _entry_disposition(response_headers, request_headers):
             retval = "FRESH"
     return retval
 
+
 def _decompressContent(response, new_content):
     content = new_content
     try:
@@ -435,6 +444,7 @@ def _decompressContent(response, new_content):
         content = ""
         raise FailedToDecompressContent(_("Content purported to be compressed with %s but failed to decompress.") % response.get('content-encoding'), response, content)
     return content
+
 
 def _updateCache(request_headers, response_headers, content, cache, cachekey):
     if cachekey:
@@ -520,7 +530,6 @@ class Authentication(object):
         example Digest may return stale=true.
         """
         return False
-
 
 
 class BasicAuthentication(Authentication):
@@ -675,6 +684,7 @@ class WsseAuthentication(Authentication):
                 cnonce,
                 iso_now)
 
+
 class GoogleLoginAuthentication(Authentication):
     def __init__(self, credentials, host, request_uri, headers, response, content, http):
         from urllib import urlencode
@@ -714,12 +724,13 @@ AUTH_SCHEME_CLASSES = {
 
 AUTH_SCHEME_ORDER = ["hmacdigest", "googlelogin", "digest", "wsse", "basic"]
 
+
 class FileCache(object):
     """Uses a local directory as a store for cached files.
     Not really safe to use if multiple threads or processes are going to
     be running on the same cache.
     """
-    def __init__(self, cache, safe=safename): # use safe=lambda x: md5.new(x).hexdigest() for the old behavior
+    def __init__(self, cache, safe=safename):  # use safe=lambda x: md5.new(x).hexdigest() for the old behavior
         self.cache = cache
         self.safe = safe
         if not os.path.exists(cache):
@@ -747,6 +758,7 @@ class FileCache(object):
         if os.path.exists(cacheFullPath):
             os.remove(cacheFullPath)
 
+
 class Credentials(object):
     def __init__(self):
         self.credentials = []
@@ -762,13 +774,16 @@ class Credentials(object):
             if cdomain == "" or domain == cdomain:
                 yield (name, password)
 
+
 class KeyCerts(Credentials):
     """Identical to Credentials except that
     name/password are mapped to key/cert."""
     pass
 
+
 class AllHosts(object):
     pass
+
 
 class ProxyInfo(object):
     """Collect information required to use a proxy."""
@@ -854,6 +869,7 @@ def proxy_info_from_environment(method='http'):
     pi.bypass_hosts = bypass_hosts
     return pi
 
+
 def proxy_info_from_url(url, method='http'):
     """
     Construct a ProxyInfo from a URL (such as http_proxy env var)
@@ -880,7 +896,7 @@ def proxy_info_from_url(url, method='http'):
     else:
         port = dict(https=443, http=80)[method]
 
-    proxy_type = 3 # socks.PROXY_TYPE_HTTP
+    proxy_type = 3  # socks.PROXY_TYPE_HTTP
     return ProxyInfo(
         proxy_type = proxy_type,
         proxy_host = host,
@@ -956,6 +972,7 @@ class HTTPConnectionWithTimeout(httplib.HTTPConnection):
             break
         if not self.sock:
             raise socket.error, msg
+
 
 class HTTPSConnectionWithTimeout(httplib.HTTPSConnection):
     """
@@ -1737,7 +1754,6 @@ class Response(dict):
                 self[key.lower()] = value
             self.status = int(self.get('status', self.status))
             self.reason = self.get('reason', self.reason)
-
 
     def __getattr__(self, name):
         if name == 'dict':

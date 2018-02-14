@@ -34,37 +34,32 @@ header-host: {host}'''.format(host=host).encode()), content
 
 
 def test_other_pickle_http():
-    http = httplib2.Http()
-    pickled_http = pickle.dumps(http)
-    new_http = pickle.loads(pickled_http)
+    http = httplib2.Http(cache=tests.get_cache_path())
+    new_http = pickle.loads(pickle.dumps(http))
 
     assert tuple(sorted(new_http.__dict__)) == tuple(sorted(http.__dict__))
+    assert new_http.credentials.credentials == http.credentials.credentials
+    assert new_http.certificates.credentials == http.certificates.credentials
+    assert new_http.cache.cache == http.cache.cache
     for key in new_http.__dict__:
-        if key in ('certificates', 'credentials'):
-            assert new_http.__dict__[key].credentials == http.__dict__[key].credentials
-        elif key == 'cache':
-            assert new_http.__dict__[key].cache == http.__dict__[key].cache
-        else:
-            assert new_http.__dict__[key] == http.__dict__[key]
+        if key not in ('cache', 'certificates', 'credentials'):
+            assert getattr(new_http, key) == getattr(http, key)
 
 
 def test_other_pickle_http_with_connection():
     http = httplib2.Http()
     http.request('http://random-domain:81/', connection_type=tests.MockHTTPConnection)
-    pickled_http = pickle.dumps(http)
-    new_http = pickle.loads(pickled_http)
+    new_http = pickle.loads(pickle.dumps(http))
     assert tuple(http.connections) == ('http:random-domain:81',)
     assert new_http.connections == {}
 
 
 def test_other_pickle_custom_request_http():
-    def dummy_request(*args, **kwargs):
-        return new_request(*args, **kwargs)
-    dummy_request.dummy_attr = 'dummy_value'
-
-    http.request = dummy_request
-    pickled_http = pickle.dumps(http)
-    assert b"S'request'" not in pickled_http
+    http = httplib2.Http()
+    http.request = lambda: None
+    http.request.dummy_attr = 'dummy_value'
+    new_http = pickle.loads(pickle.dumps(http))
+    assert getattr(new_http.request, 'dummy_attr', None) is None
 
 
 def test_timeout_global():
