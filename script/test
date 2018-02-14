@@ -10,7 +10,7 @@ pip_install=(
 # By default, run tests with pytest-forked plugin,
 # disable in terminal for debugging, you may add --forked
 flag_forked="--forked"
-if [[ -t 1 ]] ; then
+if [[ -z "${CONTINUOUS_INTEGRATION-}" ]] && [[ -t 1 ]] ; then
 	flag_forked=""
 fi
 test_flags=(
