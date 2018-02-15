@@ -88,9 +88,9 @@ def test_get_iri():
     query = u'?a=\N{CYRILLIC CAPITAL LETTER DJE}'
     with tests.server_reflect() as uri:
         response, content = http.request(uri + query, 'GET')
-    d = dict(tuple(x.split(b'=', 1)) for x in content.strip().split(b'\n')[:3])
-    assert b'uri' in d
-    assert b'a=%D0%82' in d[b'uri']
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.uri == '/?a=%D0%82'
 
 
 def test_get_is_default_method():
@@ -98,17 +98,21 @@ def test_get_is_default_method():
     http = httplib2.Http()
     with tests.server_reflect() as uri:
         response, content = http.request(uri)
-    assert response['request-method'] == "GET"
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.method == 'GET'
 
 
 def test_different_methods():
     # Test that all methods can be used
     http = httplib2.Http()
-    methods = ["GET", "PUT", "DELETE", "POST", "unknown"]
+    methods = ['GET', "PUT", "DELETE", "POST", "unknown"]
     with tests.server_reflect(request_count=len(methods)) as uri:
         for method in methods:
             response, content = http.request(uri, method, body=b" ")
-            assert response['request-method'] == method
+            assert response.status == 200
+            reflected = tests.Request.from_bytes(content)
+            assert reflected.method == method
 
 
 def test_head_read():
@@ -126,27 +130,29 @@ def test_get_no_cache():
     # Test that can do a GET w/o the cache turned on.
     http = httplib2.Http()
     with tests.server_const_http() as uri:
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
     assert response.status == 200
     assert response.previous is None
 
 
-def test_UserAgent():
+def test_user_agent():
     # Test that we provide a default user-agent
     http = httplib2.Http()
     with tests.server_reflect() as uri:
         response, content = http.request(uri, 'GET')
-    assert response.status == 200
-    assert b'header-user-agent: Python-httplib2/' in content
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.headers.get('user-agent', '').startswith('Python-httplib2/')
 
 
-def test_UserAgentNonDefault():
+def test_user_agent_non_default():
     # Test that the default user-agent can be over-ridden
     http = httplib2.Http()
     with tests.server_reflect() as uri:
         response, content = http.request(uri, 'GET', headers={'User-Agent': 'fred/1.0'})
-    assert response.status == 200
-    assert b'header-user-agent: fred/1.0\n' in content
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.headers.get('user-agent') == 'fred/1.0'
 
 
 def test_Get300WithLocation():
@@ -350,18 +356,19 @@ def test_Get302NoLocation():
     assert content == b''
 
 
-def test_Get303():
+def test_303():
     # Do a follow-up GET on a Location: header
     # returned from a POST that gave a 303.
     http = httplib2.Http()
     routes = {
-        '/final': tests.make_http_reflect(body=b'This is the final destination.\n'),
+        '/final': tests.make_http_reflect(),
         '': tests.make_http_reflect(status='303 See Other', headers={'location': '/final'}),
     }
     with tests.server_route(routes, request_count=2) as uri:
         response, content = http.request(uri, "POST", " ")
     assert response.status == 200
-    assert content == b"This is the final destination.\n"
+    reflected = tests.Request.from_bytes(content)
+    assert reflected.uri == '/final'
     assert response.previous.status == 303
 
     # Skip follow-up GET
@@ -376,11 +383,13 @@ def test_Get303():
     cases = 'DELETE GET HEAD POST PUT EVEN_NEW_ONES'.split(' ')
     with tests.server_route(routes, request_count=len(cases)*2) as uri:
         for method in cases:
-            response, _ = http.request(uri, method, body=b" ")
-            assert response['request-method'] == 'GET'
+            response, content = http.request(uri, method, body=b'q q')
+            assert response.status == 200
+            reflected = tests.Request.from_bytes(content)
+            assert reflected.method == 'GET'
 
 
-def test_GetEtag():
+def test_etag_used():
     # Test that we use ETags properly to validate our cache
     cache_path = tests.get_cache_path()
     http = httplib2.Http(cache=cache_path)
@@ -399,12 +408,12 @@ def test_GetEtag():
         return tests.http_response_bytes(**response_kwargs)
 
     with tests.server_request(handler, request_count=2) as uri:
-        response, _ = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        response, _ = http.request(uri, 'GET', headers={'accept-encoding': 'identity'})
         assert response['etag'] == '"437b930db84b8079c2dd804a71936b5f"'
 
-        http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        http.request(uri, 'GET', headers={'accept-encoding': 'identity'})
         response, _ = http.request(
-            uri, "GET",
+            uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'must-revalidate'},
         )
         assert response.status == 200
@@ -420,12 +429,12 @@ def test_GetEtag():
         assert response.status == 200
         assert response.fromcache
 
-        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity', 'range': 'bytes=0-0'})
+        response, content = http.request(uri, 'GET', headers={'accept-encoding': 'identity', 'range': 'bytes=0-0'})
         assert response.status == 206
         assert not response.fromcache
 
 
-def test_GetIgnoreEtag():
+def test_etag_ignore():
     # Test that we can forcibly ignore ETags
     http = httplib2.Http(cache=tests.get_cache_path())
     response_kwargs = dict(
@@ -433,25 +442,28 @@ def test_GetIgnoreEtag():
         add_etag=True,
     )
     with tests.server_reflect(request_count=3, **response_kwargs) as uri:
-        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
+        response, content = http.request(uri, 'GET', headers={'accept-encoding': 'identity'})
+        assert response.status == 200
         assert response['etag'] != ""
 
         response, content = http.request(
-            uri, "GET",
+            uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
-        assert b'\nheader-if-none-match:' in content
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.headers.get('if-none-match')
 
         http.ignore_etag = True
         response, content = http.request(
-            uri, "GET",
+            uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
         assert not response.fromcache
-        assert b'\nheader-if-none-match:' not in content
+        reflected = tests.Request.from_bytes(content)
+        assert not reflected.headers.get('if-none-match')
 
 
-def test_OverrideEtag():
+def test_etag_override():
     # Test that we can forcibly ignore ETags
     http = httplib2.Http(cache=tests.get_cache_path())
     response_kwargs = dict(
@@ -459,21 +471,26 @@ def test_OverrideEtag():
         add_etag=True,
     )
     with tests.server_reflect(request_count=3, **response_kwargs) as uri:
-        response, content = http.request(uri, "GET", headers={'accept-encoding': 'identity'})
-        assert response['etag'] != ""
+        response, _ = http.request(uri, 'GET', headers={'accept-encoding': 'identity'})
+        assert response.status == 200
+        assert response['etag'] != ''
 
         response, content = http.request(
-            uri, "GET",
+            uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
-        assert b'\nheader-if-none-match:' in content
-        assert b'\nheader-if-none-match: fred' not in content
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.headers.get('if-none-match')
+        assert reflected.headers.get('if-none-match') != 'fred'
 
         response, content = http.request(
-            uri, "GET",
+            uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0', 'if-none-match': 'fred'},
         )
-        assert b'\nheader-if-none-match: fred' in content
+        assert response.status == 200
+        reflected = tests.Request.from_bytes(content)
+        assert reflected.headers.get('if-none-match') == 'fred'
 
 
 @pytest.mark.skip(reason='was commented in legacy code')
@@ -481,12 +498,12 @@ def test_Get304EndToEnd():
     pass
     # Test that end to end headers get overwritten in the cache
     # uri = urllib.parse.urljoin(base, "304/end2end.cgi")
-    # response, content = http.request(uri, "GET")
+    # response, content = http.request(uri, 'GET')
     # assertNotEqual(response['etag'], "")
     # old_date = response['date']
     # time.sleep(2)
 
-    # response, content = http.request(uri, "GET", headers = {'Cache-Control': 'max-age=0'})
+    # response, content = http.request(uri, 'GET', headers = {'Cache-Control': 'max-age=0'})
     # # The response should be from the cache, but the Date: header should be updated.
     # new_date = response['date']
     # assert new_date != old_date
@@ -516,15 +533,15 @@ def test_Get304LastModified():
         yield tests.http_response_bytes(status=304)
 
     with tests.server_yield(handler, request_count=2) as uri:
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.get('last-modified') == date
 
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.status == 200
         assert response.fromcache
 
 
-def test_Get307():
+def test_get_307():
     # Test that we do follow 307 redirects but
     # do not cache the 307
     http = httplib2.Http(cache=tests.get_cache_path(), timeout=1)
@@ -540,14 +557,14 @@ def test_Get307():
     )
 
     with tests.server_list_http([r307, r200, r307]) as uri:
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.previous.status == 307
         assert not response.previous.fromcache
         assert response.status == 200
         assert not response.fromcache
         assert content == b'final content\n'
 
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.previous.status == 307
         assert not response.previous.fromcache
         assert response.status == 200
@@ -555,11 +572,11 @@ def test_Get307():
         assert content == b'final content\n'
 
 
-def test_Get410():
+def test_get_410():
     # Test that we pass 410's through
     http = httplib2.Http()
     with tests.server_const_http(status=410) as uri:
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.status == 410
 
 
@@ -576,54 +593,7 @@ Content-Length: 7\r\n\
 Link: link2\r\n\r\n\
 content'''
     with tests.server_const_bytes(response) as uri:
-        response, content = http.request(uri, "GET")
+        response, content = http.request(uri, 'GET')
         assert response.status == 200
         assert content == b"content"
         assert response['link'], 'link1, link2'
-
-
-@pytest.mark.skip(reason='FIXME: tests.serve_socket is not capable of keepalive connections')
-def test_ConnectionClose():
-    http = httplib2.Http()
-    count = [0]
-
-    def handler(client):
-        count[0] += 1
-        client.sendall(tests.http_response_bytes(proto='HTTP/1.1'))
-        if count[0] > 1:
-            client.close()
-            return
-
-    with tests.server_socket(handler, request_count=2) as uri:
-        http.request(uri, "GET")
-        for c in http.connections.values():
-            assert c.sock is not None
-        response, content = http.request(uri, "GET", headers={"connection": "close"})
-        for c in http.connections.values():
-            assert c.sock is None
-
-
-def test_End2End():
-    # one end to end header
-    response = {'content-type': 'application/atom+xml', 'te': 'deflate'}
-    end2end = httplib2._get_end2end_headers(response)
-    assert 'content-type' in end2end
-    assert 'te' not in end2end
-    assert 'connection' not in end2end
-
-    # one end to end header that gets eliminated
-    response = {'connection': 'content-type', 'content-type': 'application/atom+xml', 'te': 'deflate'}
-    end2end = httplib2._get_end2end_headers(response)
-    assert 'content-type' not in end2end
-    assert 'te' not in end2end
-    assert 'connection' not in end2end
-
-    # Degenerate case of no headers
-    response = {}
-    end2end = httplib2._get_end2end_headers(response)
-    assert len(end2end) == 0
-
-    # Degenerate case of connection referrring to a header not passed in
-    response = {'connection': 'content-type'}
-    end2end = httplib2._get_end2end_headers(response)
-    assert len(end2end) == 0

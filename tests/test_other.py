@@ -12,14 +12,14 @@ from six.moves import urllib
     sys.version_info <= (3,),
     reason='TODO: httplib2._convert_byte_str was defined only in python3 code version',
 )
-def test_other_convert_byte_str():
+def test_convert_byte_str():
     with tests.assert_raises(TypeError):
         httplib2._convert_byte_str(4)
     assert httplib2._convert_byte_str(b'Hello') == 'Hello'
     assert httplib2._convert_byte_str('World') == 'World'
 
 
-def test_other_reflect():
+def test_reflect():
     http = httplib2.Http()
     with tests.server_reflect() as uri:
         response, content = http.request(uri + '?query', 'METHOD')
@@ -33,7 +33,7 @@ protocol=HTTP/1.1
 header-host: {host}'''.format(host=host).encode()), content
 
 
-def test_other_pickle_http():
+def test_pickle_http():
     http = httplib2.Http(cache=tests.get_cache_path())
     new_http = pickle.loads(pickle.dumps(http))
 
@@ -46,7 +46,7 @@ def test_other_pickle_http():
             assert getattr(new_http, key) == getattr(http, key)
 
 
-def test_other_pickle_http_with_connection():
+def test_pickle_http_with_connection():
     http = httplib2.Http()
     http.request('http://random-domain:81/', connection_type=tests.MockHTTPConnection)
     new_http = pickle.loads(pickle.dumps(http))
@@ -54,7 +54,7 @@ def test_other_pickle_http_with_connection():
     assert new_http.connections == {}
 
 
-def test_other_pickle_custom_request_http():
+def test_pickle_custom_request_http():
     http = httplib2.Http()
     http.request = lambda: None
     http.request.dummy_attr = 'dummy_value'
@@ -99,3 +99,51 @@ def test_timeout_individual():
 def test_timeout_https():
     c = httplib2.HTTPSConnectionWithTimeout('localhost', 80, timeout=47)
     assert 47 == c.timeout
+
+
+# @pytest.mark.xfail(
+#     sys.version_info >= (3,),
+#     reason='[py3] last request should open new connection, but client does not realize socket was closed by server',
+# )
+def test_connection_close():
+    http = httplib2.Http()
+    g = []
+
+    def handler(request):
+        g.append(request.number)
+        return tests.http_response_bytes(proto='HTTP/1.1')
+
+    with tests.server_request(handler, request_count=3) as uri:
+        http.request(uri, 'GET')  # conn1 req1
+        for c in http.connections.values():
+            assert c.sock is not None
+        http.request(uri, 'GET', headers={'connection': 'close'})
+        time.sleep(0.7)
+        http.request(uri, 'GET')  # conn2 req1
+    assert g == [1, 2, 1]
+
+
+def test_get_end2end_headers():
+    # one end to end header
+    response = {'content-type': 'application/atom+xml', 'te': 'deflate'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert 'content-type' in end2end
+    assert 'te' not in end2end
+    assert 'connection' not in end2end
+
+    # one end to end header that gets eliminated
+    response = {'connection': 'content-type', 'content-type': 'application/atom+xml', 'te': 'deflate'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert 'content-type' not in end2end
+    assert 'te' not in end2end
+    assert 'connection' not in end2end
+
+    # Degenerate case of no headers
+    response = {}
+    end2end = httplib2._get_end2end_headers(response)
+    assert len(end2end) == 0
+
+    # Degenerate case of connection referrring to a header not passed in
+    response = {'connection': 'content-type'}
+    end2end = httplib2._get_end2end_headers(response)
+    assert len(end2end) == 0

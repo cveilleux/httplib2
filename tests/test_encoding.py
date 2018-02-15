@@ -52,7 +52,7 @@ def test_gzip_malformed_response():
         headers={'content-encoding': 'gzip'},
         body=b'obviously not compressed',
     )
-    with tests.server_const_bytes(response, accept_count=2) as uri:
+    with tests.server_const_bytes(response, request_count=2) as uri:
         with tests.assert_raises(httplib2.FailedToDecompressContent):
             http.request(uri, 'GET')
 
@@ -87,7 +87,7 @@ def test_deflate_malformed_response():
         headers={'content-encoding': 'deflate'},
         body=b'obviously not compressed',
     )
-    with tests.server_const_bytes(response, accept_count=2) as uri:
+    with tests.server_const_bytes(response, request_count=2) as uri:
         with tests.assert_raises(httplib2.FailedToDecompressContent):
             http.request(uri, 'GET')
 

@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import copy
 import base64
 import contextlib
 import email.utils
@@ -44,17 +45,16 @@ class BufferedReader(object):
         if isinstance(sock, bytes):
             self._sock = None
             self._buf = sock
-            self._end = True
 
     def _fill(self, target=1, more=None, untilend=False):
-        # crutch to enable request from bytes
-        if self._sock is None:
-            return
         if more:
             target = len(self._buf) + more
         while untilend or (len(self._buf) < target):
-            chunk = self._sock.recv(8 << 10)
-            # print('server.recv', chunk)
+            # crutch to enable Request.from_bytes
+            if self._sock is None:
+                chunk = b''
+            else:
+                chunk = self._sock.recv(8 << 10)
             if not chunk:
                 self._end = True
                 if untilend:
@@ -108,10 +108,11 @@ class Request(object):
             start_line = buf.readline()
         except EOFError:
             return None
+        assert not start_line.startswith(b'HTTP/'), 'This looks like HTTP response, not request: ' + repr(start_line)
         r = Request()
         r.raw = start_line
         r.method, r.uri, r.proto = start_line.rstrip().decode().split(' ', 2)
-        assert r.proto.startswith('HTTP/')
+        assert r.proto.startswith('HTTP/'), repr(start_line)
         r.version = r.proto[5:]
 
         while True:
@@ -216,9 +217,12 @@ def server_socket(fun, request_count=1, timeout=5):
     gresult = [None]
     gcounter = [0]
 
-    def tick():
+    def tick(request):
         gcounter[0] += 1
-        return gcounter[0] < request_count
+        keep = True
+        keep &= gcounter[0] < request_count
+        keep &= request.headers.get('connection', '').lower() != 'close'
+        return keep
 
     def server_socket_thread(srv):
         try:
@@ -228,7 +232,13 @@ def server_socket(fun, request_count=1, timeout=5):
                     client.settimeout(timeout)
                     fun(client, tick)
                 finally:
-                    client.close()
+                    try:
+                        client.shutdown(socket.SHUT_RDWR)
+                    except (IOError, socket.error):
+                        pass
+                    # FIXME: client.close() introduces connection reset by peer
+                    # at least in other/connection_close test
+                    # should not be a problem since socket would close upon garbage collection
             if gcounter[0] > request_count:
                 gresult[0] = Exception('Request count expected={0} actual={1}'.format(request_count, gcounter[0]))
         except Exception as e:
@@ -259,14 +269,18 @@ def server_yield(fun, **kwargs):
 
     def server_yield_socket_handler(sock, tick):
         buf = BufferedReader(sock)
+        i = 0
         while True:
             request = Request.from_buffered(buf)
             if request is None:
                 break
+            i += 1
+            request.client_addr = sock.getsockname()
+            request.number = i
             rq.put(request)
             response = six.next(rg)
             sock.sendall(response)
-            if not tick():
+            if not tick(request):
                 break
 
     return server_socket(server_yield_socket_handler, **kwargs)
@@ -275,13 +289,17 @@ def server_yield(fun, **kwargs):
 def server_request(request_handler, **kwargs):
     def server_request_socket_handler(sock, tick):
         buf = BufferedReader(sock)
+        i = 0
         while True:
             request = Request.from_buffered(buf)
             if request is None:
                 break
+            i += 1
+            request.client_addr = sock.getsockname()
+            request.number = i
             response = request_handler(request=request)
             sock.sendall(response)
-            if not tick():
+            if not tick(request):
                 break
 
     return server_socket(server_request_socket_handler, **kwargs)
@@ -305,11 +323,11 @@ def http_response_bytes(proto='HTTP/1.1', status='200 OK', headers=None, body=b'
     if headers is None:
         headers = {}
     if add_content_length:
-        headers['content-length'] = str(len(body))
+        headers.setdefault('content-length', str(len(body)))
     if add_date:
-        headers['date'] = email.utils.formatdate()
+        headers.setdefault('date', email.utils.formatdate())
     if add_etag:
-        headers['etag'] = '"{0}"'.format(hashlib.md5(body).hexdigest())
+        headers.setdefault('etag', '"{0}"'.format(hashlib.md5(body).hexdigest()))
     header_string = ''.join('{0}: {1}\r\n'.format(k, v) for k, v in headers.items())
     if not undefined_body_length and proto != 'HTTP/1.0' and 'content-length' not in headers:
         raise Exception('httplib2.tests.http_response_bytes: client could not figure response body length')
@@ -322,21 +340,14 @@ def http_response_bytes(proto='HTTP/1.1', status='200 OK', headers=None, body=b'
 
 
 def make_http_reflect(**kwargs):
+    assert 'body' not in kwargs, 'make_http_reflect will overwrite response body'
+
     def fun(request):
-        kw = kwargs.copy()
-        request_headers = ''.join('header-{0}: {1}\n'.format(k, v) for k, v in six.iteritems(request.headers))
-        response_headers = kw.setdefault('headers', {})
-        response_headers['request-method'] = request.method
-        # TODO: use request.raw instead of request_headers
-        body = '''\
-method={0}\n\
-uri={1}\n\
-protocol={2}\n\
-{3}\n\
-'''.format(request.method, request.uri, request.proto, request_headers).encode()
-        kw.setdefault('body', body)
+        kw = copy.deepcopy(kwargs)
+        kw['body'] = request.raw
         response = http_response_bytes(**kw)
         return response
+
     return fun
 
 
