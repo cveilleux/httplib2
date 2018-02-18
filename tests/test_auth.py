@@ -1,4 +1,5 @@
 import httplib2
+import pytest
 import tests
 from six.moves import urllib
 
@@ -21,7 +22,7 @@ def test_credentials():
     assert len(tuple(c.iter(''))) == 0
 
 
-def test_auth_basic():
+def test_basic():
     # Test Basic Authentication
     http = httplib2.Http()
     password = tests.gen_password()
@@ -34,7 +35,7 @@ def test_auth_basic():
         assert response.status == 200
 
 
-def test_auth_basic_for_domain():
+def test_basic_for_domain():
     # Test Basic Authentication
     http = httplib2.Http()
     password = tests.gen_password()
@@ -51,7 +52,7 @@ def test_auth_basic_for_domain():
         assert response.status == 200
 
 
-def test_auth_basic_two_credentials():
+def test_basic_two_credentials():
     # Test Basic Authentication with multiple sets of credentials
     http = httplib2.Http()
     password1 = tests.gen_password()
@@ -70,7 +71,7 @@ def test_auth_basic_two_credentials():
         assert response.status == 200
 
 
-def test_auth_digest():
+def test_digest():
     # Test that we support Digest Authentication
     http = httplib2.Http()
     password = tests.gen_password()
@@ -83,7 +84,7 @@ def test_auth_digest():
         assert response.status == 200, content.decode()
 
 
-def test_auth_digest_next_nonce_nc():
+def test_digest_next_nonce_nc():
     # Test that if the server sets nextnonce that we reset
     # the nonce count back to 1
     http = httplib2.Http()
@@ -111,194 +112,149 @@ def test_auth_digest_next_nonce_nc():
         assert info3.get('digest', {}).get('nc') == '00000001', info3
 
 
-def test_auth_DigestAuthStale():
+def test_digest_auth_stale():
     # Test that we can handle a nonce becoming stale
-    uri = urllib.parse.urljoin(base, 'digest-expire/file.txt')
-    http.add_credentials('joe', 'password')
-    response, content = http.request(uri, 'GET', headers = {'cache-control':'no-cache'})
-    info = httplib2._parse_www_authenticate(response, 'authentication-info')
-    assert response.status == 200
-
-    time.sleep(3)
-    # Sleep long enough that the nonce becomes stale
-
-    response, content = http.request(uri, 'GET', headers = {'cache-control':'no-cache'})
-    assert not response.fromcache
-    assert response._stale_digest
-    info3 = httplib2._parse_www_authenticate(response, 'authentication-info')
-    assert response.status == 200
-
-
-def test_auth_ParseWWWAuthenticateEmpty():
-    res = httplib2._parse_www_authenticate({})
-    assertEqual(len(list(res.keys())), 0)
-
-
-def test_auth_ParseWWWAuthenticate():
-    # different uses of spaces around commas
-    res = httplib2._parse_www_authenticate({ 'www-authenticate': 'Test realm="test realm" , foo=foo ,bar="bar", baz=baz,qux=qux'})
-    assertEqual(len(list(res.keys())), 1)
-    assertEqual(len(list(res['test'].keys())), 5)
-
-    # tokens with non-alphanum
-    res = httplib2._parse_www_authenticate({ 'www-authenticate': 'T*!%#st realm=to*!%#en, to*!%#en="quoted string"'})
-    assertEqual(len(list(res.keys())), 1)
-    assertEqual(len(list(res['t*!%#st'].keys())), 2)
-
-    # quoted string with quoted pairs
-    res = httplib2._parse_www_authenticate({ 'www-authenticate': 'Test realm="a \\"test\\" realm"'})
-    assertEqual(len(list(res.keys())), 1)
-    assert res['test']['realm'] == 'a "test" realm'
+    http = httplib2.Http()
+    password = tests.gen_password()
+    grenew_nonce = [None]
+    requests = []
+    handler = tests.http_reflect_with_auth(
+        allow_scheme='digest',
+        allow_credentials=(('joe', password),),
+        out_renew_nonce=grenew_nonce,
+        out_requests=requests,
+    )
+    with tests.server_request(handler, request_count=4) as uri:
+        http.add_credentials('joe', password)
+        response, _ = http.request(uri, 'GET')
+        assert response.status == 200
+        info = httplib2._parse_www_authenticate(requests[0][1].headers, 'www-authenticate')
+        grenew_nonce[0]()
+        response, _ = http.request(uri, 'GET')
+        assert response.status == 200
+        assert not response.fromcache
+        assert getattr(response, '_stale_digest', False)
+        info2 = httplib2._parse_www_authenticate(requests[2][1].headers, 'www-authenticate')
+        nonce1 = info.get('digest', {}).get('nonce', '')
+        nonce2 = info2.get('digest', {}).get('nonce', '')
+        assert nonce1 != ''
+        assert nonce2 != ''
+        assert nonce1 != nonce2, (nonce1, nonce2)
 
 
-def test_auth_ParseWWWAuthenticateStrict():
-    httplib2.USE_WWW_AUTH_STRICT_PARSING = 1
-    test_auth_ParseWWWAuthenticate()
-    httplib2.USE_WWW_AUTH_STRICT_PARSING = 0
+@pytest.mark.parametrize(
+    'data', (
+        ({}, {}),
+        ({'www-authenticate': ''}, {}),
+        ({'www-authenticate': 'Test realm="test realm" , foo=foo ,bar="bar", baz=baz,qux=qux'},
+         {'test': {'realm': 'test realm', 'foo': 'foo', 'bar': 'bar', 'baz': 'baz', 'qux': 'qux'}}),
+        ({'www-authenticate': 'T*!%#st realm=to*!%#en, to*!%#en="quoted string"'},
+         {'t*!%#st': {'realm': 'to*!%#en', 'to*!%#en': 'quoted string'}}),
+        ({'www-authenticate': 'Test realm="a \\"test\\" realm"'},
+         {'test': {'realm': 'a "test" realm'}}),
+        ({'www-authenticate': 'Basic realm="me"'},
+         {'basic': {'realm': 'me'}}),
+        ({'www-authenticate': 'Basic realm="me", algorithm="MD5"'},
+         {'basic': {'realm': 'me', 'algorithm': 'MD5'}}),
+        ({'www-authenticate': 'Basic realm="me", algorithm=MD5'},
+         {'basic': {'realm': 'me', 'algorithm': 'MD5'}}),
+        ({'www-authenticate': 'Basic realm="me",other="fred" '},
+         {'basic': {'realm': 'me', 'other': 'fred'}}),
+        ({'www-authenticate': 'Basic REAlm="me" '},
+         {'basic': {'realm': 'me'}}),
+        ({'www-authenticate': 'Digest realm="digest1", qop="auth,auth-int", nonce="7102dd2", opaque="e9517f"'},
+         {'digest': {'realm': 'digest1', 'qop': 'auth,auth-int', 'nonce': '7102dd2', 'opaque': 'e9517f'}}),
+        # multiple schema choice
+        ({'www-authenticate': 'Digest realm="multi-d", nonce="8b11d0f6", opaque="cc069c" Basic realm="multi-b" '},
+         {'digest': {'realm': 'multi-d', 'nonce': '8b11d0f6', 'opaque': 'cc069c'},
+          'basic': {'realm': 'multi-b'}}),
+        # FIXME
+        # comma between schemas (glue for multiple headers with same name)
+        # ({'www-authenticate': 'Digest realm="2-comma-d", qop="auth-int", nonce="c0c8ff1", Basic realm="2-comma-b"'},
+        #  {'digest': {'realm': '2-comma-d', 'qop': 'auth-int', 'nonce': 'c0c8ff1'},
+        #   'basic': {'realm': '2-comma-b'}}),
+        # FIXME
+        # comma between schemas + WSSE (glue for multiple headers with same name)
+        # ({'www-authenticate': 'Digest realm="com3d", Basic realm="com3b", WSSE realm="com3w", profile="token"'},
+        #  {'digest': {'realm': 'com3d'}, 'basic': {'realm': 'com3b'}, 'wsse': {'realm': 'com3w', profile': 'token'}}),
+        # FIXME
+        # multiple syntax figures
+        # ({'www-authenticate':
+        #     'Digest realm="brig", qop \t=\t"\tauth,auth-int", nonce="(*)&^&$%#",opaque="5ccc"' +
+        #     ', Basic REAlm="zoo", WSSE realm="very", profile="UsernameToken"'},
+        #  {'digest': {'realm': 'brig', 'qop': 'auth,auth-int', 'nonce': '(*)&^&$%#', 'opaque': '5ccc'},
+        #   'basic': {'realm': 'zoo'},
+        #   'wsse': {'realm': 'very', 'profile': 'UsernameToken'}}),
+        # more quote combos
+        ({'www-authenticate': 'Digest realm="myrealm", nonce="KBAA=3", algorithm=MD5, qop="auth", stale=true'},
+         {'digest': {'realm': 'myrealm', 'nonce': 'KBAA=3', 'algorithm': 'MD5', 'qop': 'auth', 'stale': 'true'}}),
+    ), ids=lambda data: str(data[0]))
+@pytest.mark.parametrize('strict', (True, False), ids=('strict', 'relax'))
+def test_parse_www_authenticate_correct(data, strict):
+    headers, info = data
+    # FIXME: move strict to parse argument
+    httplib2.USE_WWW_AUTH_STRICT_PARSING = strict
+    try:
+        assert httplib2._parse_www_authenticate(headers) == info
+    finally:
+        httplib2.USE_WWW_AUTH_STRICT_PARSING = 0
 
 
-def test_auth_ParseWWWAuthenticateBasic():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Basic realm="me"'})
-    basic = res['basic']
-    assert 'me' == basic['realm']
-
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Basic realm="me", algorithm="MD5"'})
-    basic = res['basic']
-    assert 'me' == basic['realm']
-    assert 'MD5' == basic['algorithm']
-
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Basic realm="me", algorithm=MD5'})
-    basic = res['basic']
-    assert 'me' == basic['realm']
-    assert 'MD5' == basic['algorithm']
-
-
-def test_auth_ParseWWWAuthenticateBasic2():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Basic realm="me",other="fred" '})
-    basic = res['basic']
-    assert 'me' == basic['realm']
-    assert 'fred' == basic['other']
-
-
-def test_auth_ParseWWWAuthenticateBasic3():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Basic REAlm="me" '})
-    basic = res['basic']
-    assert 'me' == basic['realm']
-
-
-def test_auth_ParseWWWAuthenticateDigest():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41"'})
-    digest = res['digest']
-    assertEqual('testrealm@host.com', digest['realm'])
-    assertEqual('auth,auth-int', digest['qop'])
-
-
-def test_auth_ParseWWWAuthenticateMultiple():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41" Basic realm="me" '})
-    digest = res['digest']
-    assertEqual('testrealm@host.com', digest['realm'])
-    assertEqual('auth,auth-int', digest['qop'])
-    assert 'dcd98b7102dd2f0e8b11d0f600bfb0c093' == digest['nonce']
-    assert '5ccc069c403ebaf9f0171e9517f40e41' == digest['opaque']
-    basic = res['basic']
-    assert 'me' == basic['realm']
-
-
-def test_auth_ParseWWWAuthenticateMultiple2():
-    # Handle an added comma between challenges, which might get thrown in if the challenges were
-    # originally sent in separate www-authenticate headers.
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41", Basic realm="me" '})
-    digest = res['digest']
-    assertEqual('testrealm@host.com', digest['realm'])
-    assertEqual('auth,auth-int', digest['qop'])
-    assert 'dcd98b7102dd2f0e8b11d0f600bfb0c093' == digest['nonce']
-    assert '5ccc069c403ebaf9f0171e9517f40e41' == digest['opaque']
-    basic = res['basic']
-    assert 'me' == basic['realm']
-
-
-def test_auth_ParseWWWAuthenticateMultiple3():
-    # Handle an added comma between challenges, which might get thrown in if the challenges were
-    # originally sent in separate www-authenticate headers.
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41", Basic realm="me", WSSE realm="foo", profile="UsernameToken"'})
-    digest = res['digest']
-    assertEqual('testrealm@host.com', digest['realm'])
-    assertEqual('auth,auth-int', digest['qop'])
-    assert 'dcd98b7102dd2f0e8b11d0f600bfb0c093' == digest['nonce']
-    assert '5ccc069c403ebaf9f0171e9517f40e41' == digest['opaque']
-    basic = res['basic']
-    assert 'me' == basic['realm']
-    wsse = res['wsse']
-    assert 'foo' == wsse['realm']
-    assert 'UsernameToken' == wsse['profile']
-
-
-def test_auth_ParseWWWAuthenticateMultiple4():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="test-real.m@host.com", qop \t=\t"\tauth,auth-int", nonce="(*)&^&$%#",opaque="5ccc069c403ebaf9f0171e9517f40e41", Basic REAlm="me", WSSE realm="foo", profile="UsernameToken"'})
-    digest = res['digest']
-    assertEqual('test-real.m@host.com', digest['realm'])
-    assertEqual('\tauth,auth-int', digest['qop'])
-    assertEqual('(*)&^&$%#', digest['nonce'])
-
-
-def test_auth_ParseWWWAuthenticateMoreQuoteCombos():
-    res = httplib2._parse_www_authenticate({'www-authenticate': 'Digest realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", algorithm=MD5, qop="auth", stale=true'})
-    digest = res['digest']
-    assert 'myrealm' == digest['realm']
-
-
-def test_auth_ParseWWWAuthenticateMalformed():
+def test_parse_www_authenticate_malformed():
+    # TODO: test (and fix) header value 'barbqwnbm-bb...:asd' leads to dead loop
     with tests.assert_raises(httplib2.MalformedHeader):
         httplib2._parse_www_authenticate(
             {'www-authenticate': 'OAuth "Facebook Platform" "invalid_token" "Invalid OAuth access token."'}
         )
 
 
-# TODO: test _parse_www_authenticate with string 'barbqwnbm-bb...:asd'
-# leads to dead loop
-
-
-def test_DigestObject():
+def test_digest_object():
     credentials = ('joe', 'password')
     host = None
-    request_uri = '/projects/httplib2/test/digest/'
+    request_uri = '/test/digest/'
     headers = {}
     response = {
-        'www-authenticate': 'Digest realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", algorithm=MD5, qop="auth"'
+        'www-authenticate': 'Digest realm="myrealm", nonce="KBAA=35", algorithm=MD5, qop="auth"'
     }
     content = b''
 
     d = httplib2.DigestAuthentication(credentials, host, request_uri, headers, response, content, None)
     d.request('GET', request_uri, headers, content, cnonce="33033375ec278a46")
     our_request = 'authorization: ' + headers['authorization']
-    working_request = 'authorization: Digest username="joe", realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", uri="/projects/httplib2/test/digest/", algorithm=MD5, response="97ed129401f7cdc60e5db58a80f3ea8b", qop=auth, nc=00000001, cnonce="33033375ec278a46"'
+    working_request = (
+        'authorization: Digest username="joe", realm="myrealm", nonce="KBAA=35", uri="/test/digest/"' +
+        ', algorithm=MD5, response="de6d4a123b80801d0e94550411b6283f", qop=auth, nc=00000001, cnonce="33033375ec278a46"'
+    )
     assert our_request == working_request
 
 
-def test_DigestObjectWithOpaque():
+def test_digest_object_with_opaque():
     credentials = ('joe', 'password')
     host = None
-    request_uri = '/projects/httplib2/test/digest/'
+    request_uri = '/digest/opaque/'
     headers = {}
     response = {
-        'www-authenticate': 'Digest realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", algorithm=MD5, qop="auth", opaque="atestopaque"'
+        'www-authenticate': 'Digest realm="myrealm", nonce="30352fd", algorithm=MD5, qop="auth", opaque="atestopaque"',
     }
     content = ''
 
     d = httplib2.DigestAuthentication(credentials, host, request_uri, headers, response, content, None)
-    d.request('GET', request_uri, headers, content, cnonce="33033375ec278a46")
+    d.request('GET', request_uri, headers, content, cnonce="5ec2")
     our_request = 'authorization: ' + headers['authorization']
-    working_request = 'authorization: Digest username="joe", realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", uri="/projects/httplib2/test/digest/", algorithm=MD5, response="97ed129401f7cdc60e5db58a80f3ea8b", qop=auth, nc=00000001, cnonce="33033375ec278a46", opaque="atestopaque"'
+    working_request = (
+        'authorization: Digest username="joe", realm="myrealm", nonce="30352fd", uri="/digest/opaque/", algorithm=MD5' +
+        ', response="a1fab43041f8f3789a447f48018bee48", qop=auth, nc=00000001, cnonce="5ec2", opaque="atestopaque"'
+    )
     assert our_request == working_request
 
 
-def test_DigestObjectStale():
+def test_digest_object_stale():
     credentials = ('joe', 'password')
     host = None
-    request_uri = '/projects/httplib2/test/digest/'
+    request_uri = '/digest/stale/'
     headers = {}
     response = httplib2.Response({})
-    response['www-authenticate'] = 'Digest realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", algorithm=MD5, qop="auth", stale=true'
+    response['www-authenticate'] = 'Digest realm="myrealm", nonce="bd669f", algorithm=MD5, qop="auth", stale=true'
     response.status = 401
     content = b''
     d = httplib2.DigestAuthentication(credentials, host, request_uri, headers, response, content, None)
@@ -306,23 +262,23 @@ def test_DigestObjectStale():
     assert d.response(response, content)
 
 
-def test_DigestObjectAuthInfo():
+def test_digest_object_auth_info():
     credentials = ('joe', 'password')
     host = None
-    request_uri = '/projects/httplib2/test/digest/'
+    request_uri = '/digest/nextnonce/'
     headers = {}
     response = httplib2.Response({})
-    response['www-authenticate'] = 'Digest realm="myrealm", nonce="Ygk86AsKBAA=3516200d37f9a3230352fde99977bd6d472d4306", algorithm=MD5, qop="auth", stale=true'
+    response['www-authenticate'] = 'Digest realm="myrealm", nonce="barney", algorithm=MD5, qop="auth", stale=true'
     response['authentication-info'] = 'nextnonce="fred"'
     content = b''
     d = httplib2.DigestAuthentication(credentials, host, request_uri, headers, response, content, None)
     # Returns true to force a retry
     assert not d.response(response, content)
-    assert 'fred' == d.challenge['nonce']
-    assert 1 == d.challenge['nc']
+    assert d.challenge['nonce'] == 'fred'
+    assert d.challenge['nc'] == 1
 
 
-def test_WsseAlgorithm():
+def test_wsse_algorithm():
     digest = httplib2._wsse_username_token('d36e316282959a9ed4c89851497a717f', '2003-12-15T14:43:07Z', 'taadtaadpstcsm')
     expected = b'quR/EWLAV4xLf9Zqyw4pDmfV9OY='
     assert expected == digest

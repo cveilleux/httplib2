@@ -24,13 +24,10 @@ def test_reflect():
     with tests.server_reflect() as uri:
         response, content = http.request(uri + '?query', 'METHOD')
     assert response.status == 200
-    assert response['request-method'] == 'METHOD'
     host = urllib.parse.urlparse(uri).netloc
     assert content.startswith('''\
-method=METHOD
-uri=/?query
-protocol=HTTP/1.1
-header-host: {host}'''.format(host=host).encode()), content
+METHOD /?query HTTP/1.1\r\n\
+Host: {host}\r\n'''.format(host=host).encode()), content
 
 
 def test_pickle_http():

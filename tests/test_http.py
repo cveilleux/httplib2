@@ -89,7 +89,7 @@ def test_get_iri():
     with tests.server_reflect() as uri:
         response, content = http.request(uri + query, 'GET')
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.uri == '/?a=%D0%82'
 
 
@@ -99,7 +99,7 @@ def test_get_is_default_method():
     with tests.server_reflect() as uri:
         response, content = http.request(uri)
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.method == 'GET'
 
 
@@ -111,7 +111,7 @@ def test_different_methods():
         for method in methods:
             response, content = http.request(uri, method, body=b" ")
             assert response.status == 200
-            reflected = tests.Request.from_bytes(content)
+            reflected = tests.HttpRequest.from_bytes(content)
             assert reflected.method == method
 
 
@@ -141,7 +141,7 @@ def test_user_agent():
     with tests.server_reflect() as uri:
         response, content = http.request(uri, 'GET')
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.headers.get('user-agent', '').startswith('Python-httplib2/')
 
 
@@ -151,7 +151,7 @@ def test_user_agent_non_default():
     with tests.server_reflect() as uri:
         response, content = http.request(uri, 'GET', headers={'User-Agent': 'fred/1.0'})
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.headers.get('user-agent') == 'fred/1.0'
 
 
@@ -367,7 +367,7 @@ def test_303():
     with tests.server_route(routes, request_count=2) as uri:
         response, content = http.request(uri, "POST", " ")
     assert response.status == 200
-    reflected = tests.Request.from_bytes(content)
+    reflected = tests.HttpRequest.from_bytes(content)
     assert reflected.uri == '/final'
     assert response.previous.status == 303
 
@@ -385,7 +385,7 @@ def test_303():
         for method in cases:
             response, content = http.request(uri, method, body=b'q q')
             assert response.status == 200
-            reflected = tests.Request.from_bytes(content)
+            reflected = tests.HttpRequest.from_bytes(content)
             assert reflected.method == 'GET'
 
 
@@ -450,7 +450,7 @@ def test_etag_ignore():
             uri, 'GET',
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.headers.get('if-none-match')
 
         http.ignore_etag = True
@@ -459,7 +459,7 @@ def test_etag_ignore():
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
         assert not response.fromcache
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert not reflected.headers.get('if-none-match')
 
 
@@ -480,7 +480,7 @@ def test_etag_override():
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0'},
         )
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.headers.get('if-none-match')
         assert reflected.headers.get('if-none-match') != 'fred'
 
@@ -489,7 +489,7 @@ def test_etag_override():
             headers={'accept-encoding': 'identity', 'cache-control': 'max-age=0', 'if-none-match': 'fred'},
         )
         assert response.status == 200
-        reflected = tests.Request.from_bytes(content)
+        reflected = tests.HttpRequest.from_bytes(content)
         assert reflected.headers.get('if-none-match') == 'fred'
 
 

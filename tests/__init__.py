@@ -1,17 +1,20 @@
 from __future__ import print_function
 
-import copy
 import base64
 import contextlib
+import copy
 import email.utils
+import functools
 import gzip
 import hashlib
 import httplib2
 import os
 import random
+import re
 import shutil
 import six
 import socket
+import struct
 import threading
 import time
 import traceback
@@ -50,11 +53,12 @@ class BufferedReader(object):
         if more:
             target = len(self._buf) + more
         while untilend or (len(self._buf) < target):
-            # crutch to enable Request.from_bytes
+            # crutch to enable HttpRequest.from_bytes
             if self._sock is None:
                 chunk = b''
             else:
                 chunk = self._sock.recv(8 << 10)
+            # print('!!! recv', chunk)
             if not chunk:
                 self._end = True
                 if untilend:
@@ -88,55 +92,75 @@ class BufferedReader(object):
         return line
 
 
-class Request(object):
+def parse_http_message(kind, buf):
+    if buf._end:
+        return None
+    try:
+        start_line = buf.readline()
+    except EOFError:
+        return None
+    msg = kind()
+    msg.raw = start_line
+    if kind is HttpRequest:
+        assert re.match(br'.+ HTTP/\d\.\d\r\n$', start_line), 'Start line does not look like HTTP request: ' + repr(start_line)
+        msg.method, msg.uri, msg.proto = start_line.rstrip().decode().split(' ', 2)
+        assert msg.proto.startswith('HTTP/'), repr(start_line)
+    elif kind is HttpResponse:
+        assert re.match(br'^HTTP/\d\.\d \d+ .+\r\n$', start_line), 'Start line does not look like HTTP response: ' + repr(start_line)
+        msg.proto, msg.status, msg.reason = start_line.rstrip().decode().split(' ', 2)
+        msg.status = int(msg.status)
+        assert msg.proto.startswith('HTTP/'), repr(start_line)
+    else:
+        raise Exception('Use HttpRequest or HttpResponse .from_{bytes,buffered}')
+    msg.version = msg.proto[5:]
+
+    while True:
+        line = buf.readline()
+        msg.raw += line
+        line = line.rstrip()
+        if not line:
+            break
+        t = line.decode().split(':', 1)
+        msg.headers[t[0].lower()] = t[1].lstrip()
+
+    content_length_string = msg.headers.get('content-length', '')
+    if content_length_string.isdigit():
+        content_length = int(content_length_string)
+        msg.body = msg.body_raw = buf.read(content_length)
+    elif msg.headers.get('transfer-encoding') == 'chunked':
+        raise NotImplemented
+    elif msg.version == '1.0':
+        msg.body = msg.body_raw = buf.readall()
+    else:
+        msg.body = msg.body_raw = b''
+
+    msg.raw += msg.body_raw
+    return msg
+
+
+class HttpMessage(object):
     def __init__(self):
         self.headers = {}
 
-    def __repr__(self):
-        return 'Request ' + repr(vars(self))
-
-    @staticmethod
-    def from_bytes(bs):
+    @classmethod
+    def from_bytes(cls, bs):
         buf = BufferedReader(bs)
-        return Request.from_buffered(buf)
+        return parse_http_message(cls, buf)
 
-    @staticmethod
-    def from_buffered(buf):
-        if buf._end:
-            return None
-        try:
-            start_line = buf.readline()
-        except EOFError:
-            return None
-        assert not start_line.startswith(b'HTTP/'), 'This looks like HTTP response, not request: ' + repr(start_line)
-        r = Request()
-        r.raw = start_line
-        r.method, r.uri, r.proto = start_line.rstrip().decode().split(' ', 2)
-        assert r.proto.startswith('HTTP/'), repr(start_line)
-        r.version = r.proto[5:]
+    @classmethod
+    def from_buffered(cls, buf):
+        return parse_http_message(cls, buf)
 
-        while True:
-            line = buf.readline()
-            r.raw += line
-            line = line.rstrip()
-            if not line:
-                break
-            t = line.decode().split(':', 1)
-            r.headers[t[0].lower()] = t[1].lstrip()
+    def __repr__(self):
+        return '{} {}'.format(self.__class__, repr(vars(self)))
 
-        content_length_string = r.headers.get('content-length', '')
-        if content_length_string.isdigit():
-            content_length = int(content_length_string)
-            r.body = r.body_raw = buf.read(content_length)
-        elif r.headers.get('transfer-encoding') == 'chunked':
-            raise NotImplemented
-        elif r.version == '1.0':
-            r.body = r.body_raw = buf.readall()
-        else:
-            r.body = r.body_raw = b''
 
-        r.raw += r.body_raw
-        return r
+class HttpRequest(HttpMessage):
+    pass
+
+
+class HttpResponse(HttpMessage):
+    pass
 
 
 class MockResponse(six.BytesIO):
@@ -264,21 +288,21 @@ def server_socket(fun, request_count=1, timeout=5):
 
 
 def server_yield(fun, **kwargs):
-    rq = queue.Queue(1)
-    rg = fun(rq.get)
+    q = queue.Queue(1)
+    g = fun(q.get)
 
     def server_yield_socket_handler(sock, tick):
         buf = BufferedReader(sock)
         i = 0
         while True:
-            request = Request.from_buffered(buf)
+            request = HttpRequest.from_buffered(buf)
             if request is None:
                 break
             i += 1
             request.client_addr = sock.getsockname()
             request.number = i
-            rq.put(request)
-            response = six.next(rg)
+            q.put(request)
+            response = six.next(g)
             sock.sendall(response)
             if not tick(request):
                 break
@@ -291,7 +315,7 @@ def server_request(request_handler, **kwargs):
         buf = BufferedReader(sock)
         i = 0
         while True:
-            request = Request.from_buffered(buf)
+            request = HttpRequest.from_buffered(buf)
             if request is None:
                 break
             i += 1
@@ -331,6 +355,8 @@ def http_response_bytes(proto='HTTP/1.1', status='200 OK', headers=None, body=b'
     header_string = ''.join('{0}: {1}\r\n'.format(k, v) for k, v in headers.items())
     if not undefined_body_length and proto != 'HTTP/1.0' and 'content-length' not in headers:
         raise Exception('httplib2.tests.http_response_bytes: client could not figure response body length')
+    if str(status).isdigit():
+        status = '{} {}'.format(status, http_client.responses[status])
     response = '{proto} {status}\r\n{headers}\r\n'.format(
         proto=proto,
         status=status,
@@ -409,7 +435,20 @@ def http_parse_auth(s):
     return result
 
 
-def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None):
+def store_request_response(out):
+    def wrapper(fun):
+        @functools.wraps(fun)
+        def wrapped(request, *a, **kw):
+            response_bytes = fun(request, *a, **kw)
+            if out is not None:
+                response = HttpResponse.from_bytes(response_bytes)
+                out.append((request, response))
+            return response_bytes
+        return wrapped
+    return wrapper
+
+
+def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None, out_requests=None):
     '''
     allow_scheme - 'basic', 'digest', etc
     allow_credentials - sequence of ('name', 'password')
@@ -417,12 +456,14 @@ def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None
         Way to return nonce renew function to caller.
         Kind of `out` parameter in some programming languages.
         Allows to keep same signature for all handler builder functions.
+    out_requests - None | []
+        If set to list, every parsed request will be appended here.
     '''
     glastnc = [None]
     gnextnonce = [None]
-    gserver_nonce = [gen_digest_nonce()]
+    gserver_nonce = [gen_digest_nonce(salt=b'n')]
     realm = 'httplib2 test'
-    server_opaque = gen_digest_nonce()
+    server_opaque = gen_digest_nonce(salt=b'o')
 
     def renew_nonce():
         if gnextnonce[0]:
@@ -434,15 +475,17 @@ def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None
         out_renew_nonce[0] = renew_nonce
 
     def deny(**kwargs):
-        if kwargs.pop('nonce_stale', None):
+        nonce_stale = kwargs.pop('nonce_stale', False)
+        if nonce_stale:
             kwargs.setdefault('body', b'nonce stale')
         if allow_scheme == 'basic':
             authenticate = 'basic realm="{realm}"'.format(realm=realm)
         elif allow_scheme == 'digest':
-            authenticate = ', '.join((
-                'digest realm="{realm}"', 'qop="auth"',
-                'nonce="{nonce}"', 'opaque="{opaque}"'
-            )).format(realm=realm, nonce=gserver_nonce[0], opaque=server_opaque)
+            authenticate = (
+                'digest realm="{realm}", qop="auth"'
+                + ', nonce="{nonce}", opaque="{opaque}"'
+                + (', stale=true' if nonce_stale else '')
+            ).format(realm=realm, nonce=gserver_nonce[0], opaque=server_opaque)
         else:
             raise Exception('unknown allow_scheme={0}'.format(allow_scheme))
         deny_headers = {'www-authenticate': authenticate}
@@ -453,6 +496,7 @@ def http_reflect_with_auth(allow_scheme, allow_credentials, out_renew_nonce=None
         kwargs.setdefault('body', b'HTTP authorization required')
         return http_response_bytes(**kwargs)
 
+    @store_request_response(out_requests)
     def http_reflect_with_auth_handler(request):
         auth_header = request.headers.get('authorization', '')
         if not auth_header:
@@ -541,8 +585,9 @@ def get_cache_path():
     return path
 
 
-def gen_digest_nonce():
-    return base64.b64encode('{}'.format(time.time()).encode()).decode()
+def gen_digest_nonce(salt=b''):
+    t = struct.pack('>Q', int(time.time() * 1e9))
+    return base64.b64encode(t + b':' + hashlib.sha1(t + salt).digest()).decode()
 
 
 def gen_password():
