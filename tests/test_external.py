@@ -10,33 +10,33 @@ import sys
 import tests
 
 
-def test_Get301ViaHttps():
+def test_get_301_via_https():
     # Google always redirects to http://google.com
     http = httplib2.Http()
-    response, content = http.request("https://code.google.com/apis/", "GET")
+    response, content = http.request("https://code.google.com/apis/", 'GET')
     assert response.status == 200
     assert response.previous.status == 301
 
 
-def test_GetViaHttps():
+def test_get_via_https():
     # Test that we can handle HTTPS
     http = httplib2.Http()
-    response, content = http.request("https://google.com/adsense/", "GET")
+    response, content = http.request("https://google.com/adsense/", 'GET')
     assert response.status == 200
 
 
-def test_GetViaHttpsSpecViolationOnLocation():
+def test_get_via_https_spec_violation_on_location():
     # Test that we follow redirects through HTTPS
     # even if they violate the spec by including
     # a relative Location: header instead of an
     # absolute one.
     http = httplib2.Http()
-    response, content = http.request("https://google.com/adsense", "GET")
+    response, content = http.request("https://google.com/adsense", 'GET')
     assert response.status == 200
     assert response.previous is not None
 
 
-def test_GetViaHttpsKeyCert():
+def test_get_via_https_key_cert():
     #  At this point I can only test
     #  that the key and cert files are passed in
     #  correctly to httplib. It would be nice to have
@@ -44,7 +44,7 @@ def test_GetViaHttpsKeyCert():
     http = httplib2.Http(timeout=2)
     http.add_certificate("akeyfile", "acertfile", "bitworking.org")
     try:
-        http.request("https://bitworking.org", "GET")
+        http.request("https://bitworking.org", 'GET')
     except AttributeError:
         assert http.connections["https:bitworking.org"].key_file == "akeyfile"
         assert http.connections["https:bitworking.org"].cert_file == "acertfile"
@@ -53,7 +53,7 @@ def test_GetViaHttpsKeyCert():
         pass
 
     try:
-        http.request("https://notthere.bitworking.org", "GET")
+        http.request("https://notthere.bitworking.org", 'GET')
     except httplib2.ServerNotFoundError:
         assert http.connections["https:notthere.bitworking.org"].key_file is None
         assert http.connections["https:notthere.bitworking.org"].cert_file is None
@@ -67,7 +67,7 @@ def test_ssl_invalid_ca_certs_path():
     # certs file.
     http = httplib2.Http(ca_certs='/nosuchfile')
     with tests.assert_raises(IOError):
-        http.request("https://www.google.com/", "GET")
+        http.request("https://www.google.com/", 'GET')
 
 
 @pytest.mark.xfail(
@@ -86,10 +86,10 @@ def test_ssl_wrong_ca():
     http = httplib2.Http(ca_certs=other_ca_certs)
     http.follow_redirects = False
     with tests.assert_raises(ssl.SSLError):
-        http.request("https://www.google.com/", "GET")
+        http.request("https://www.google.com/", 'GET')
 
 
-def test_SniHostnameValidation():
+def test_sni_hostname_validation():
     # TODO: make explicit test server with SNI validation
     http = httplib2.Http()
-    http.request("https://google.com/", method="GET")
+    http.request("https://google.com/", method='GET')

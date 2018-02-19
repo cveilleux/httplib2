@@ -106,7 +106,7 @@ def test_get_is_default_method():
 def test_different_methods():
     # Test that all methods can be used
     http = httplib2.Http()
-    methods = ['GET', "PUT", "DELETE", "POST", "unknown"]
+    methods = ['GET', 'PUT', 'DELETE', 'POST', 'unknown']
     with tests.server_reflect(request_count=len(methods)) as uri:
         for method in methods:
             response, content = http.request(uri, method, body=b" ")
@@ -121,7 +121,7 @@ def test_head_read():
     http = httplib2.Http()
     respond_with = b'HTTP/1.0 200 OK\r\ncontent-length: 14\r\n\r\nnon-empty-body'
     with tests.server_const_bytes(respond_with) as uri:
-        response, content = http.request(uri, "HEAD")
+        response, content = http.request(uri, 'HEAD')
     assert response.status == 200
     assert content == b""
 
@@ -365,7 +365,7 @@ def test_303():
         '': tests.make_http_reflect(status='303 See Other', headers={'location': '/final'}),
     }
     with tests.server_route(routes, request_count=2) as uri:
-        response, content = http.request(uri, "POST", " ")
+        response, content = http.request(uri, 'POST', " ")
     assert response.status == 200
     reflected = tests.HttpRequest.from_bytes(content)
     assert reflected.uri == '/final'
@@ -375,7 +375,7 @@ def test_303():
     http = httplib2.Http()
     http.follow_redirects = False
     with tests.server_route(routes, request_count=1) as uri:
-        response, content = http.request(uri, "POST", " ")
+        response, content = http.request(uri, 'POST', " ")
     assert response.status == 303
 
     # All methods can be used
@@ -425,7 +425,7 @@ def test_etag_used():
             status_line = f.readline()
         assert status_line.startswith("status:")
 
-        response, content = http.request(uri, "HEAD", headers={'accept-encoding': 'identity'})
+        response, content = http.request(uri, 'HEAD', headers={'accept-encoding': 'identity'})
         assert response.status == 200
         assert response.fromcache
 
@@ -580,11 +580,7 @@ def test_get_410():
         assert response.status == 410
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3,),
-    reason='FIXME: for unknown reason global timeout test fails in Python3',
-)
-def test_GetDuplicateHeaders():
+def test_get_duplicate_headers():
     # Test that duplicate headers get concatenated via ','
     http = httplib2.Http()
     response = b'''HTTP/1.0 200 OK\r\n\

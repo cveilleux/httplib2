@@ -352,6 +352,7 @@ def _parse_www_authenticate(headers, headername='www-authenticate'):
     return retval
 
 
+# TODO: add current time as _entry_disposition argument to avoid sleep in tests
 def _entry_disposition(response_headers, request_headers):
     """Determine freshness from the Date, Expires and Cache-Control headers.
 
