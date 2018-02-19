@@ -22,7 +22,9 @@ if [[ -n "${CONTINUOUS_INTEGRATION-}" ]] ; then
 		fi
 	else
 		pip install -e .
-		pytest ${test_flags[@]}
+		httplib2_test_still_run_skipped=1 pytest --fulltrace -k test_303 $@ tests/ || true
+		httplib2_test_still_run_skipped=1 pytest --fulltrace -k test_head_301 $@ tests/ || true
+		pytest --fulltrace ${test_flags[@]}
 	fi
 	codecov --flags=$(echo $python |tr -d -- '-.')
 else

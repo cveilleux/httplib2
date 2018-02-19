@@ -305,7 +305,8 @@ def test_update_uses_cached_etag_overridden():
         assert response.status == 412
 
 
-@pytest.mark.parametrize('data', (
+@pytest.mark.parametrize(
+    'data', (
         ({}, {}),
         ({'cache-control': ' no-cache'},
          {'no-cache': 1}),
@@ -328,7 +329,8 @@ def test_normalize_headers():
     assert h['other'] == 'Stuff'
 
 
-@pytest.mark.parametrize('data', (
+@pytest.mark.parametrize(
+    'data', (
         ({'cache-control': 'no-cache'}, {'cache-control': 'max-age=7200'}, 'TRANSPARENT'),
         ({}, {'cache-control': 'max-age=fred, min-fresh=barney'}, 'STALE'),
         ({}, {'date': '{now}', 'expires': '{now+3}'}, 'FRESH'),

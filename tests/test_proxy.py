@@ -6,7 +6,7 @@ import httplib2
 import os
 import pytest
 import sys
-import tests
+# import tests
 
 
 def test_from_url():
