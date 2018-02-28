@@ -50,24 +50,6 @@ import socket
 import ssl
 
 
-def ssl_wrap_socket(sock, key_file, cert_file, disable_validation,
-                     ca_certs, ssl_version, hostname):
-
-    if not hasattr(ssl, 'SSLContext'):
-        raise RuntimeError("httplib2 requires Python 3.2+ for ssl.SSLContext")
-
-    if ssl_version is None:
-        ssl_version = ssl.PROTOCOL_TLS
-
-    context = ssl.SSLContext(ssl_version)
-    context.verify_mode = ssl.CERT_NONE if disable_validation else ssl.CERT_REQUIRED
-    context.check_hostname = not disable_validation
-    if cert_file:
-        context.load_cert_chain(cert_file, key_file)
-    if ca_certs:
-        context.load_verify_locations(ca_certs)
-    return context.wrap_socket(sock, server_hostname=hostname)
-
 try:
     import socks
 except ImportError:
@@ -145,6 +127,32 @@ HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authoriza
 # Default CA certificates file bundled with httplib2.
 CA_CERTS = os.path.join(
         os.path.dirname(os.path.abspath(__file__ )), "cacerts.txt")
+
+# PROTOCOL_TLS is python 3.5.3+. PROTOCOL_SSLv23 is deprecated.
+# Both PROTOCOL_TLS and PROTOCOL_SSLv23 are equivalent and means:
+# > Selects the highest protocol version that both the client and server support.
+# > Despite the name, this option can select “TLS” protocols as well as “SSL”.
+# source: https://docs.python.org/3.5/library/ssl.html#ssl.PROTOCOL_TLS
+DEFAULT_TLS_VERSION = getattr(ssl, 'PROTOCOL_TLS', None) or getattr(ssl, 'PROTOCOL_SSLv23')
+
+
+def ssl_wrap_socket(sock, key_file, cert_file, disable_validation,
+                     ca_certs, ssl_version, hostname):
+
+    if not hasattr(ssl, 'SSLContext'):
+        raise RuntimeError("httplib2 requires Python 3.2+ for ssl.SSLContext")
+
+    if ssl_version is None:
+        ssl_version = DEFAULT_TLS_VERSION
+
+    context = ssl.SSLContext(ssl_version)
+    context.verify_mode = ssl.CERT_NONE if disable_validation else ssl.CERT_REQUIRED
+    context.check_hostname = not disable_validation
+    if cert_file:
+        context.load_cert_chain(cert_file, key_file)
+    if ca_certs:
+        context.load_verify_locations(ca_certs)
+    return context.wrap_socket(sock, server_hostname=hostname)
 
 def _get_end2end_headers(response):
     hopbyhop = list(HOP_BY_HOP)
@@ -862,6 +870,8 @@ class HTTPConnectionWithTimeout(http.client.HTTPConnection):
             port = self.port
             proxy_type = None
 
+        socket_err = None
+
         for res in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
             af, socktype, proto, canonname, sa = res
             try:
@@ -882,8 +892,8 @@ class HTTPConnectionWithTimeout(http.client.HTTPConnection):
                                 (proxy_host, proxy_port, proxy_rdns, proxy_user, proxy_pass, proxy_headers))))
 
                 self.sock.connect((self.host, self.port) + sa[2:])
-            except socket.error as msg:
-                self.msg = msg
+            except socket.error as e:
+                socket_err = e
                 if self.debuglevel > 0:
                     print(
                         "connect fail: ({0}, {1})".format(self.host, self.port))
@@ -897,7 +907,7 @@ class HTTPConnectionWithTimeout(http.client.HTTPConnection):
                 continue
             break
         if not self.sock:
-            raise socket.error(self.msg)
+            raise socket_err
 
 
 class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
@@ -918,7 +928,7 @@ class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
             raise RuntimeError("httplib2 requires Python 3.2+ for ssl.SSLContext")
 
         self.disable_ssl_certificate_validation = disable_ssl_certificate_validation
-        self.ssl_version = ssl.PROTOCOL_TLS
+        self.ssl_version = DEFAULT_TLS_VERSION
 
         if proxy_info:
             if isinstance(proxy_info, ProxyInfo):
@@ -955,6 +965,8 @@ class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
             proxy_type = None
             proxy_headers = None
 
+        socket_err = None
+
         address_info = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
         for family, socktype, proto, canonname, sockaddr in address_info:
             try:
@@ -986,8 +998,8 @@ class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
                 raise
             except (socket.timeout, socket.gaierror):
                 raise
-            except socket.error as error_msg:
-                self.error_msg = error_msg
+            except socket.error as e:
+                socket_err = e
                 if self.debuglevel > 0:
                     print("connect fail: ({0}, {1})".format((self.host, self.port)))
                     if use_proxy:
@@ -998,7 +1010,7 @@ class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
                 continue
             break
         if not self.sock:
-            raise socket.error(self.error_msg)
+            raise socket_err
 
 
 SCHEME_TO_CONNECTION = {
