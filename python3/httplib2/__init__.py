@@ -971,7 +971,7 @@ class HTTPSConnectionWithTimeout(http.client.HTTPSConnection):
                     sock.settimeout(self.timeout)
                 sock.connect((self.host, self.port))
 
-                self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
                 # Python 3.3 compatibility: emulate the check_hostname behavior
                 if not hasattr(self._context, 'check_hostname') and not self.disable_ssl_certificate_validation:
